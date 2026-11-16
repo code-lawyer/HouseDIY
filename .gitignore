@@ -1,0 +1,34 @@
+# Publish only product source, reproducible tests, documentation and examples.
+/*
+!/.gitignore
+!/.gitattributes
+!/.github/
+!/src/
+!/public/
+!/tests/
+!/vendor/
+!/build/
+!/examples/
+!/docs/
+!/scripts/
+!/package.json
+!/package-lock.json
+!/README.md
+!/LICENSE
+!/THIRD_PARTY_NOTICES.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+
+# Local acceptance scripts contain private fixtures and historical evidence.
+/scripts/*
+!/scripts/dev.mjs
+!/scripts/electron-qa.mjs
+!/scripts/qa-startup.mjs
+!/scripts/qa-regressions.mjs
+!/scripts/audit-ui.mjs
+
+node_modules/
+*.log
+.env
+.env.*
+*.lnk

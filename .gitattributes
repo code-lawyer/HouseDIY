@@ -1,0 +1,14 @@
+* text=auto eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.css text eol=lf
+*.svg text eol=lf
+*.png binary
+*.ico binary
+# Preserve the audited upstream byte hash, including original line endings.
+vendor/designer.html -text
+vendor/HOUSE-PLAN-DESIGNER-LICENSE -text

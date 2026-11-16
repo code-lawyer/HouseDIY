@@ -1,0 +1,184 @@
+{
+  "version": 2,
+  "name": "日光客厅",
+  "height": 2800,
+  "phase": "renovate",
+  "nodes": [
+    {
+      "id": "246e473454124ebb",
+      "x": 200,
+      "y": 200
+    },
+    {
+      "id": "01a5c55a1d0e41bb",
+      "x": 5800,
+      "y": 200
+    },
+    {
+      "id": "02cb98acc8a04f4b",
+      "x": 5800,
+      "y": 4300
+    },
+    {
+      "id": "ee75ba8b71cd42e8",
+      "x": 200,
+      "y": 4300
+    }
+  ],
+  "walls": [
+    {
+      "id": "794d6253642f4340",
+      "a": "246e473454124ebb",
+      "b": "01a5c55a1d0e41bb",
+      "t": 200,
+      "bearing": true,
+      "bearingFrom": "inferred",
+      "status": "existing"
+    },
+    {
+      "id": "30e68054ab554d01",
+      "a": "01a5c55a1d0e41bb",
+      "b": "02cb98acc8a04f4b",
+      "t": 200,
+      "bearing": true,
+      "bearingFrom": "inferred",
+      "status": "existing"
+    },
+    {
+      "id": "546e88e9defa4692",
+      "a": "02cb98acc8a04f4b",
+      "b": "ee75ba8b71cd42e8",
+      "t": 200,
+      "bearing": true,
+      "bearingFrom": "inferred",
+      "status": "existing"
+    },
+    {
+      "id": "546f997ce0274686",
+      "a": "ee75ba8b71cd42e8",
+      "b": "246e473454124ebb",
+      "t": 200,
+      "bearing": true,
+      "bearingFrom": "inferred",
+      "status": "existing"
+    }
+  ],
+  "openings": [
+    {
+      "id": "1522d8dd5e6b485d",
+      "wall": "794d6253642f4340",
+      "type": "window",
+      "pos": 2800,
+      "width": 2200,
+      "sill": 800,
+      "head": 2300,
+      "hinge": 0,
+      "side": 1
+    },
+    {
+      "id": "6e9ace328ccb41e3",
+      "wall": "546f997ce0274686",
+      "type": "door",
+      "pos": 900,
+      "width": 900,
+      "sill": 0,
+      "head": 2100,
+      "hinge": 0,
+      "side": 1
+    }
+  ],
+  "furniture": [
+    {
+      "key": "sofa",
+      "type": "sofa",
+      "name": "三人沙发",
+      "w": 2200,
+      "d": 950,
+      "h": 820,
+      "color": "#b5a291",
+      "x": 4500,
+      "y": 2200,
+      "rot": 90,
+      "id": "fec4f0395f8042df"
+    },
+    {
+      "key": "coffeeTable",
+      "type": "coffeeTable",
+      "name": "茶几",
+      "w": 1200,
+      "d": 600,
+      "h": 400,
+      "color": "#a47a55",
+      "x": 3000,
+      "y": 2200,
+      "rot": 90,
+      "id": "822ab637eb2345b6"
+    },
+    {
+      "key": "tvCabinet",
+      "type": "tvCabinet",
+      "name": "电视柜（电视可开关）",
+      "w": 2000,
+      "d": 400,
+      "h": 450,
+      "color": "#e6e0d6",
+      "x": 700,
+      "y": 1600,
+      "rot": 270,
+      "id": "e44d9f75a8e2427a"
+    },
+    {
+      "key": "plant",
+      "type": "plant",
+      "name": "绿植",
+      "w": 500,
+      "d": 500,
+      "h": 1400,
+      "color": "#5f8f55",
+      "x": 5300,
+      "y": 700,
+      "rot": 0,
+      "id": "dc9f155e505b406f"
+    },
+    {
+      "key": "rug",
+      "type": "rug",
+      "name": "地毯",
+      "w": 2000,
+      "d": 1700,
+      "h": 12,
+      "color": "#d9cbb5",
+      "x": 3000,
+      "y": 2200,
+      "rot": 90,
+      "id": "5a0cba8911014ad5"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "a08ed282773f44d5",
+      "name": "客厅",
+      "x": 3000,
+      "y": 2200,
+      "mat": "oak",
+      "wallMat": "latexWhite"
+    }
+  ],
+  "structs": [],
+  "beams": [],
+  "measures": [],
+  "elec": [],
+  "voids": [],
+  "comments": [],
+  "prices": {},
+  "mep": {
+    "power": "floor",
+    "water": "ceil",
+    "edits": {}
+  },
+  "look": {
+    "style": "real",
+    "palette": "plan",
+    "labels": false
+  }
+}
