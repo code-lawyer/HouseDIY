@@ -65,8 +65,7 @@ try {
   await page.setRequestInterception(true);
   let holdSave = false,
     held,
-    onHeld,
-    failSave = false;
+    onHeld;
   page.on("request", (request) => {
     if (request.url().endsWith("/api/codex/status"))
       return request.respond({
@@ -85,14 +84,6 @@ try {
       held = request;
       onHeld();
       return;
-    }
-    if (request.url().endsWith("/save") && failSave) {
-      failSave = false;
-      return request.respond({
-        status: 500,
-        contentType: "application/json",
-        body: '{"error":"测试：磁盘暂时不可用"}',
-      });
     }
     return request.continue();
   });
@@ -215,7 +206,12 @@ try {
     "Navigation blocks new UI input and drains edits queued during an in-flight save",
   );
 
-  failSave = true;
+  // Hold the next save until navigation has joined it. Otherwise autosave can
+  // consume the one-shot failure before the click, and navigation validly retries.
+  const failingSave = new Promise((resolve) => {
+    onHeld = resolve;
+  });
+  holdSave = true;
   const retryX = await frame.evaluate(() => {
     const d = window.__designer;
     d.app.plan.furniture[0].x += 50;
@@ -223,6 +219,18 @@ try {
     return d.app.plan.furniture[0].x;
   });
   await page.click("#home-button");
+  await Promise.race([
+    failingSave,
+    pause(15000).then(() => {
+      throw new Error("Failed-save interception timed out");
+    }),
+  ]);
+  assert.equal(await page.$eval("#designer", (e) => e.inert), true);
+  await held.respond({
+    status: 500,
+    contentType: "application/json",
+    body: '{"error":"测试：磁盘暂时不可用"}',
+  });
   await page.waitForFunction(() =>
     document.querySelector("#toast").textContent.includes("磁盘暂时不可用"),
   );
@@ -238,6 +246,121 @@ try {
   );
   pass(
     "Failed navigation save keeps the current editor and allows a successful retry",
+  );
+
+  const furnitureBeforeColor = await frame.evaluate(() => {
+    const d = window.__designer;
+    d.select("furn", d.app.plan.furniture[0].id);
+    return structuredClone(d.app.plan.furniture[0]);
+  });
+  await page.waitForSelector("#selection-details", { visible: true });
+  const swatchColor = "#c9bda6";
+  assert.notEqual(furnitureBeforeColor.color, swatchColor);
+  const nextNote = () =>
+    page.waitForResponse(
+      (response) =>
+        response.url().endsWith(`/variants/${second.id}/note`) &&
+        response.status() === 200,
+    );
+  const applySwatch = async () => {
+    const noted = nextNote();
+    await page.click(`[data-color="${swatchColor}"]`);
+    await noted;
+    assert.equal(
+      app.store.variant(project.id, second.id).v.plan.furniture[0].color,
+      swatchColor,
+    );
+  };
+  await applySwatch();
+  const noteCount = app.store.variant(project.id, second.id).v.messages.length;
+  await page.click(`[data-color="${swatchColor}"]`);
+  await page.waitForFunction(() =>
+    document.querySelector("#toast").textContent.includes("未作修改"),
+  );
+  assert.equal(
+    app.store.variant(project.id, second.id).v.messages.length,
+    noteCount,
+  );
+  const undoNoted = nextNote();
+  await page.click("#undo-ai");
+  await undoNoted;
+  await frame.waitForFunction(
+    (color) => window.__designer.app.plan.furniture[0].color === color,
+    {},
+    furnitureBeforeColor.color,
+  );
+  assert.equal(
+    app.store.variant(project.id, second.id).v.plan.furniture[0].color,
+    furnitureBeforeColor.color,
+  );
+
+  // A stale shell selection must never recolor a different object.
+  const beforeStaleColor = await frame.evaluate(() => {
+    const d = window.__designer;
+    d.select("furn", d.app.plan.furniture[1].id);
+    return JSON.stringify(d.app.plan);
+  });
+  const staleReply = await page.evaluate(
+    ({ id, color }) =>
+      new Promise((resolve, reject) => {
+        const editor = document.querySelector("#designer").contentWindow;
+        const requestId = "qa-stale-color";
+        const timer = setTimeout(() => {
+          removeEventListener("message", receive);
+          reject(new Error("Color reply timed out"));
+        }, 10000);
+        const receive = (event) => {
+          if (
+            event.origin !== location.origin ||
+            event.source !== editor ||
+            event.data?.source !== "housediy-editor" ||
+            event.data?.requestId !== requestId
+          )
+            return;
+          clearTimeout(timer);
+          removeEventListener("message", receive);
+          resolve(event.data);
+        };
+        addEventListener("message", receive);
+        editor.postMessage(
+          {
+            source: "housediy-shell",
+            requestId,
+            action: "color",
+            payload: { id, color },
+          },
+          location.origin,
+        );
+      }),
+    { id: furnitureBeforeColor.id, color: swatchColor },
+  );
+  assert.match(staleReply.error, /选中的家具已变化/);
+  assert.equal(
+    await frame.evaluate(() => JSON.stringify(window.__designer.app.plan)),
+    beforeStaleColor,
+  );
+  await frame.evaluate(
+    (id) => window.__designer.select("furn", id),
+    furnitureBeforeColor.id,
+  );
+  // Wait for the selection polling bridge to refresh the shell before clicking.
+  await page.waitForFunction(
+    (name) =>
+      document.querySelector("#selection-name").textContent.includes(name),
+    {},
+    furnitureBeforeColor.name,
+  );
+  await applySwatch();
+  await page.select("#variant-select", first.id);
+  frame = await ready();
+  await page.select("#variant-select", second.id);
+  frame = await ready();
+  assert.equal(
+    await frame.evaluate(() => window.__designer.app.plan.furniture[0].color),
+    swatchColor,
+  );
+  pass(
+    "Furniture swatches persist across reopening, undo correctly, skip unchanged colors and reject stale selections",
   );
 
   const color = await frame.evaluate(
@@ -263,12 +386,27 @@ try {
   );
   pass("AI furniture edit and undo both persist through the session queue");
 
-  mock.setDelay(1800);
-  await send("把沙发换成暖米色");
-  await page.waitForSelector("#stop-chat", { visible: true });
-  await page.click("#stop-chat");
-  await chatDone();
-  await pause(2000);
+  const heldResponse = mock.holdNextResponse();
+  try {
+    await send("把沙发换成暖米色");
+    await Promise.race([
+      heldResponse.received,
+      pause(15000).then(() => {
+        throw new Error("Model request was not received");
+      }),
+    ]);
+    await page.waitForSelector("#stop-chat", { visible: true });
+    await page.click("#stop-chat");
+    await chatDone();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#messages")
+        .textContent.includes("已停止，尚未应用的修改不会写入方案"),
+    );
+  } finally {
+    heldResponse.release();
+  }
+  await heldResponse.completed;
   assert.equal(
     await frame.evaluate(() => window.__designer.app.plan.furniture[0].color),
     color,
@@ -276,7 +414,72 @@ try {
   pass(
     "Stopping an AI request prevents unapplied changes from reaching the design",
   );
-  mock.setDelay(0);
+
+  await frame.evaluate(() => {
+    const d = window.__designer;
+    d.select("furn", d.app.plan.furniture[0].id);
+  });
+  await page.waitForSelector("#selection-details", { visible: true });
+  await send("添加一段隔墙");
+  await page.waitForSelector("#pending-proposal", { visible: true });
+  await chatDone();
+  await page.$eval("#chat-input", (input) => {
+    input.value =
+      "保留家具布局。\n继续调整采光。\n考虑过道空间。\n保留电视柜的位置。\n检查整体布局。";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const crowdedLayouts = [];
+  for (const [width, height] of [
+    [1120, 760],
+    [800, 600],
+  ]) {
+    await page.setViewport({ width, height });
+    await page.$eval("#pending-proposal .secondary", (button) =>
+      button.scrollIntoView({ block: "nearest" }),
+    );
+    const layout = await page.evaluate(() => {
+      const box = (selector) =>
+        document.querySelector(selector).getBoundingClientRect().toJSON();
+      const send = document.querySelector("#send-chat");
+      const rect = send.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        rect.x + rect.width / 2,
+        rect.y + rect.height / 2,
+      );
+      return {
+        width: innerWidth,
+        height: innerHeight,
+        panel: box("#chat-panel"),
+        heading: box(".chat-heading"),
+        content: box("#chat-content"),
+        form: box("#chat-form"),
+        confirm: box("#pending-proposal .primary"),
+        reject: box("#pending-proposal .secondary"),
+        sendHit: send.contains(hit),
+      };
+    });
+    assert.ok(layout.content.height > 0, JSON.stringify(layout));
+    assert.ok(layout.heading.y >= layout.panel.y - 1, JSON.stringify(layout));
+    assert.ok(layout.form.bottom <= height, JSON.stringify(layout));
+    assert.ok(layout.confirm.y >= layout.content.y - 1, JSON.stringify(layout));
+    assert.ok(
+      layout.reject.bottom <= layout.content.bottom + 1,
+      JSON.stringify(layout),
+    );
+    assert.equal(layout.sendHit, true, JSON.stringify(layout));
+    crowdedLayouts.push(layout);
+    await shot("crowded-chat-" + width);
+  }
+  measurements.crowdedChat = crowdedLayouts;
+  await page.click("#pending-proposal .secondary");
+  await page.$eval("#chat-input", (input) => {
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.setViewport({ width: 1600, height: 980 });
+  pass(
+    "Selected furniture, a pending proposal and multiline input keep the composer fixed and confirmation controls reachable",
+  );
 
   // Confirm actual renderer geometry, not merely the response text or JSON status.
   await home();

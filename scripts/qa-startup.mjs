@@ -117,6 +117,7 @@ try {
     });
   });
   await page.waitForSelector(".project-card", { timeout: 60000 });
+  await page.evaluate(() => document.fonts.ready.then(() => true));
   const appearance = await page.evaluate(() => {
     const header = document.querySelector(".shell-header");
     const logo = header.querySelector("img");
@@ -132,11 +133,21 @@ try {
       footer: document.querySelector("footer").textContent,
       nodeAccess: typeof window.require,
       processAccess: typeof window.process,
+      paper: getComputedStyle(document.documentElement)
+        .getPropertyValue("--paper")
+        .trim(),
+      bundledFontLoaded: [...document.fonts].some(
+        (font) =>
+          font.family.replace(/["']/g, "") === "HouseDIY Sans" &&
+          font.status === "loaded",
+      ),
     };
   });
   assert.equal(appearance.protocol, "http:");
   assert.equal(appearance.headerDisplay, "flex");
-  assert.equal(appearance.headerHeight, 68);
+  assert.equal(appearance.headerHeight, 72);
+  assert.equal(appearance.paper, "#f6f3ed");
+  assert.equal(appearance.bundledFontLoaded, true);
   assert.ok(appearance.logoWidth > 0);
   assert.equal(appearance.fileGuideHidden, true);
   assert.equal(appearance.desktopBridge, "function");
@@ -153,6 +164,14 @@ try {
       "/startup.js",
       "/app.js",
       "/editor-session.js",
+      "/design-tokens.css",
+      "/editor-theme.css",
+      "/editor-workspace.js",
+      "/editor-bridge.js",
+      "/icons/house.svg",
+      "/icons/couch.svg",
+      "/icons/leaf.svg",
+      "/fonts/noto-sans-sc.ttf",
     ];
     return Promise.all(
       paths.map(async (path) => {
@@ -184,6 +203,16 @@ try {
     );
   await waitEditor();
   let frame = await (await page.$("#designer")).contentFrame();
+  await frame.waitForFunction(
+    () =>
+      window.__designer?.S3.ready &&
+      !window.__designer.app.transitioning &&
+      !window.__designer.S3.isAnimating(),
+    { timeout: 60000 },
+  );
+  await page.waitForFunction(
+    () => document.querySelector("#save-status").textContent === "已保存",
+  );
   const geometry = await frame.evaluate(() => ({
     furniture: window.__designer.app.plan.furniture.length,
     rooms: window.__designer.app.rooms.regions.length,
@@ -211,6 +240,111 @@ try {
   await capture("editor.png");
   pass(
     "Opening a project retains the original 3D editor and the AI conversation panel",
+  );
+
+  const originalFurniture = await frame.evaluate(() => {
+    const d = window.__designer;
+    const item = d.app.plan.furniture[0];
+    d.select("furn", item.id);
+    return structuredClone(item);
+  });
+  const swatchColor =
+    originalFurniture.color === "#c9bda6" ? "#e7dcc7" : "#c9bda6";
+  const nextNote = () =>
+    page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/note") && response.status() === 200,
+    );
+  const applyColor = async () => {
+    await page.waitForSelector("#selection-details", { visible: true });
+    const noted = nextNote();
+    await page.click(`[data-color="${swatchColor}"]`);
+    await noted;
+    await frame.waitForFunction(
+      ({ id, color }) =>
+        window.__designer.app.plan.furniture.find((f) => f.id === id)?.color ===
+        color,
+      {},
+      { id: originalFurniture.id, color: swatchColor },
+    );
+    await page.waitForFunction(
+      (color) =>
+        document
+          .querySelector(`[data-color="${color}"]`)
+          .getAttribute("aria-pressed") === "true",
+      {},
+      swatchColor,
+    );
+  };
+  await applyColor();
+  await capture("furniture-color.png");
+  pass(
+    "Packaged furniture color controls update the renderer and save successfully",
+  );
+
+  const notesBeforeRepeat = await page.$$eval(
+    "#messages .action",
+    (items) => items.length,
+  );
+  await page.click(`[data-color="${swatchColor}"]`);
+  await page.waitForFunction(() =>
+    document.querySelector("#toast").textContent.includes("未作修改"),
+  );
+  assert.equal(
+    await page.$$eval("#messages .action", (items) => items.length),
+    notesBeforeRepeat,
+  );
+  const undoRecorded = nextNote();
+  await page.click("#undo-ai");
+  await undoRecorded;
+  await frame.waitForFunction(
+    ({ id, color }) =>
+      window.__designer.app.plan.furniture.find((f) => f.id === id)?.color ===
+      color,
+    {},
+    { id: originalFurniture.id, color: originalFurniture.color },
+  );
+  pass(
+    "Repeated colors create no false action and undo restores the previous furniture color",
+  );
+
+  await frame.evaluate(
+    (id) => window.__designer.select("furn", id),
+    originalFurniture.id,
+  );
+  await applyColor();
+  await page.click("#home-button");
+  await page.waitForSelector(".project-card", { visible: true });
+  await page.click(".project-card");
+  await waitEditor();
+  frame = await (await page.$("#designer")).contentFrame();
+  assert.equal(
+    await frame.evaluate(
+      (id) =>
+        window.__designer.app.plan.furniture.find((f) => f.id === id)?.color,
+      originalFurniture.id,
+    ),
+    swatchColor,
+  );
+  pass(
+    "The portable application reopens the saved furniture color from isolated disk data",
+  );
+
+  await page.click("#settings-button");
+  await page.waitForSelector("#settings-dialog[open]");
+  await page.select("#model-provider", "api");
+  assert.equal(
+    await page.$eval("#api-settings", (element) => element.hidden),
+    false,
+  );
+  await capture("settings.png");
+  await page.keyboard.press("Escape");
+  assert.equal(
+    await page.$eval("#settings-dialog", (element) => element.open),
+    false,
+  );
+  pass(
+    "Packaged model settings open and close without changing saved credentials",
   );
 
   if (fixturePlan) {

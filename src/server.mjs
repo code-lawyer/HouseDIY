@@ -32,7 +32,14 @@ function editorHtml(project, variant) {
   const payload = `<script id="__preset">window.__PRESET__=${encode(preset)};window.__HOUSEDIY__=${encode({ projectId: project.id, variantId: variant.id })}</script>`;
   html = html
     .replace(/<meta charset[^>]*>/i, (m) => m + payload)
-    .replace("</body>", '<script src="/editor-bridge.js"></script></body>');
+    .replace(
+      "</head>",
+      '<link rel="stylesheet" href="/design-tokens.css"><link rel="stylesheet" href="/editor-theme.css"></head>',
+    )
+    .replace(
+      "</body>",
+      '<script src="/editor-workspace.js"></script><script src="/editor-bridge.js"></script></body>',
+    );
   return html + "\n<!--\n" + license + "\n-->";
 }
 export async function startServer({
@@ -291,18 +298,26 @@ export async function startServer({
         "/startup.js": "startup.js",
         "/editor-session.js": "editor-session.js",
         "/style.css": "style.css",
+        "/design-tokens.css": "design-tokens.css",
+        "/editor-theme.css": "editor-theme.css",
+        "/editor-workspace.js": "editor-workspace.js",
         "/editor-bridge.js": "editor-bridge.js",
         "/logo.svg": "logo.svg",
+        "/fonts/noto-sans-sc.ttf": "fonts/noto-sans-sc.ttf",
       };
+      const icon = path.match(/^\/icons\/([a-z-]+)\.svg$/);
+      if (icon) staticFiles[path] = `icons/${icon[1]}.svg`;
       if (req.method === "GET" && staticFiles[path]) {
         const name = staticFiles[path],
           type = name.endsWith(".css")
             ? "text/css"
             : name.endsWith(".js")
               ? "text/javascript"
-              : name.endsWith(".svg")
-                ? "image/svg+xml"
-                : "text/html",
+              : name.endsWith(".ttf")
+                ? "font/ttf"
+                : name.endsWith(".svg")
+                  ? "image/svg+xml"
+                  : "text/html",
           content = readFileSync(new URL("public/" + name, base));
         return res
           .writeHead(200, { "content-type": type + ";charset=utf-8" })

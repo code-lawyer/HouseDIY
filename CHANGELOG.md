@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5 — 2026-11-16
+
+Warm atelier interface and review fixes for the Windows x64 portable build.
+
+- Cream and sage design tokens, Chinese typography and bundled offline icons/fonts across the home, editor and settings.
+- Compact tool rail and contextual panels that retain the original editor's tools.
+- Furniture color swatches with saving, undo and protection against stale selections; clicking the current color no longer creates a false modification record.
+- Independently scrolling conversation content keeps the composer visible with furniture colors, structural confirmations and multiline input.
+- Larger small-screen status text and expanded behavior coverage for the new controls and crowded layouts.
+
+The Windows portable executable is unsigned.
+
 ## 0.1.4 — 2026-11-16
 
 First public HouseDIY preview, renamed from the local MyHouse prototype.

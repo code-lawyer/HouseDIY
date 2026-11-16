@@ -12,3 +12,6 @@
 # Preserve the audited upstream byte hash, including original line endings.
 vendor/designer.html -text
 vendor/HOUSE-PLAN-DESIGNER-LICENSE -text
+# Preserve the original bytes of the bundled font and icon licenses.
+public/fonts/OFL.txt -text whitespace=-blank-at-eol
+public/icons/LICENSE -text whitespace=cr-at-eol

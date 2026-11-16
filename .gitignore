@@ -18,6 +18,7 @@
 !/THIRD_PARTY_NOTICES.md
 !/CHANGELOG.md
 !/CONTRIBUTING.md
+!/design-qa.md
 
 # Local acceptance scripts contain private fixtures and historical evidence.
 /scripts/*

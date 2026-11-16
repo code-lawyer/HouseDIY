@@ -1,0 +1,36 @@
+@font-face {
+  font-family: "HouseDIY Sans";
+  src: url("./fonts/noto-sans-sc.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  --paper: #f6f3ed;
+  --linen: #eeeadf;
+  --surface: #fcfaf6;
+  --ink: #30352d;
+  --muted: #62695c;
+  --line: #deddd2;
+  --sage: #64745a;
+  --sage-deep: #4e6046;
+  --sage-soft: #e3e5d6;
+  --success: #526b47;
+  --warning: #806238;
+  --danger: #a1493c;
+  --font-ui:
+    "HouseDIY Sans", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC",
+    sans-serif;
+  --font-display:
+    "Noto Serif SC", "Source Han Serif SC", "STZhongsong", "SimSun", serif;
+  --motion: cubic-bezier(0.22, 0.7, 0.26, 1);
+}
+.ui-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  background: currentColor;
+  mask: var(--icon) center / contain no-repeat;
+  vertical-align: middle;
+}

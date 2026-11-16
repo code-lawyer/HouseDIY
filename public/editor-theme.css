@@ -1,0 +1,522 @@
+/* HouseDIY's presentation layer; the pinned vendor file remains untouched. */
+:root {
+  --bg: var(--paper);
+  --panel: var(--surface);
+  --text: var(--ink);
+  --accent: var(--sage);
+  --accent-soft: var(--sage-soft);
+  --font: var(--font-ui);
+}
+body.atelier-editor {
+  background: var(--paper);
+}
+.atelier-editor [hidden] {
+  display: none !important;
+}
+.atelier-editor .lib-strip button {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.atelier-editor .lib-cats button.on,
+.atelier-editor .lib-subs button.on,
+.atelier-editor .lib-rail button.on {
+  background: var(--sage);
+  border-color: var(--sage);
+  color: #fff;
+}
+.atelier-editor .lib .item:hover,
+.atelier-editor .lib .item.cur {
+  border-color: var(--sage);
+  box-shadow: 0 0 0 1px var(--sage);
+}
+.atelier-editor .lib .item.cur::after {
+  background: var(--sage);
+}
+.atelier-editor .lib-sel {
+  background: var(--sage-soft);
+  border-color: var(--line);
+  color: var(--sage-deep);
+}
+.atelier-editor .lib-sel b {
+  color: var(--sage-deep);
+}
+.atelier-editor .lib-rail {
+  background: var(--linen);
+}
+.atelier-editor .lib-search:focus {
+  border-color: var(--sage);
+  box-shadow: 0 0 0 2px var(--sage-soft);
+}
+.atelier-editor .app {
+  position: relative;
+}
+.atelier-editor .app > main {
+  position: relative;
+}
+.atelier-editor .stage,
+.atelier-editor #pane3d {
+  background: var(--paper);
+}
+.atelier-editor .app > footer {
+  height: 25px;
+  padding-left: 98px;
+  background: var(--paper);
+  border: 0;
+  font-size: 11px;
+}
+.atelier-editor #stCoord {
+  display: none;
+}
+.atelier-editor .edge-tog,
+.atelier-editor .lw-grip {
+  display: none;
+}
+.atelier-rail {
+  width: 84px;
+  flex: none;
+  padding: 28px 11px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+  z-index: 14;
+}
+.atelier-nav {
+  border: 0;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  min-height: 72px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.atelier-nav .ui-icon {
+  width: 29px;
+  height: 29px;
+}
+.atelier-nav.on,
+.atelier-nav:hover {
+  background: var(--sage-soft);
+  color: var(--sage-deep);
+}
+.atelier-rail-bottom {
+  margin-top: auto;
+}
+.atelier-title {
+  position: absolute;
+  top: 30px;
+  left: 36px;
+  max-width: calc(100% - 270px);
+  z-index: 3;
+  pointer-events: none;
+}
+.atelier-title #planTitle {
+  display: block;
+  font: 600 40px/1.4 var(--font-display);
+  letter-spacing: 1px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.atelier-subtitle {
+  margin: 9px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.atelier-views {
+  position: absolute;
+  top: 37px;
+  right: 28px;
+  z-index: 4;
+}
+.atelier-views .seg {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 13px;
+  padding: 4px;
+}
+.atelier-views .seg button {
+  padding: 8px 14px;
+  font-size: 13px;
+  border-radius: 9px;
+  color: var(--muted);
+}
+.atelier-views .seg button svg {
+  display: none;
+}
+.atelier-views .seg button.on {
+  background: var(--sage);
+  color: #fff;
+  box-shadow: none;
+}
+.atelier-toolbar {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  z-index: 6;
+  padding: 6px;
+  border-radius: 17px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px #49432f0c;
+  max-width: calc(100% - 34px);
+}
+.atelier-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 12px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.atelier-button:hover,
+.atelier-button.on {
+  background: var(--sage-soft);
+  color: var(--sage-deep);
+}
+.atelier-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.atelier-viewport-tools {
+  position: absolute;
+  right: 22px;
+  bottom: 87px;
+  z-index: 4;
+}
+.atelier-viewport-tools .atelier-button {
+  background: var(--surface);
+  border-radius: 12px;
+  font-size: 12px;
+  padding: 8px 10px;
+}
+.atelier-camera-toggle {
+  position: absolute;
+  top: 98px;
+  right: 29px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 0;
+  cursor: pointer;
+  z-index: 4;
+  font-size: 12px;
+}
+.atelier-camera-tools {
+  display: none;
+  top: 142px;
+  left: auto;
+  right: 24px;
+  max-width: 390px;
+  padding: 12px;
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px #49432f18;
+  flex-wrap: wrap;
+  z-index: 8;
+}
+.atelier-camera-open .atelier-camera-tools {
+  display: flex;
+}
+.atelier-editor .atelier-camera-button {
+  width: auto;
+  display: inline-flex;
+  gap: 5px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.atelier-editor .atelier-advanced {
+  display: none;
+  position: absolute;
+  top: auto;
+  left: 24px;
+  right: 24px;
+  bottom: 90px;
+  height: auto;
+  padding: 18px;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px #49432f16;
+  z-index: 12;
+}
+.atelier-more .atelier-advanced {
+  display: flex;
+}
+.atelier-advanced #schemeBtn,
+.atelier-advanced .sep,
+.atelier-advanced .grow,
+.atelier-advanced .mobile-only {
+  display: none;
+}
+.atelier-advanced #toolSeg {
+  width: 100%;
+  flex-wrap: wrap;
+  background: var(--linen);
+}
+.atelier-advanced #toolSeg button {
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.atelier-advanced .dropdown {
+  top: auto;
+  bottom: 100%;
+  max-height: 50vh;
+  overflow: auto;
+}
+.atelier-editor aside#leftPanel,
+.atelier-editor aside#inspector {
+  position: absolute;
+  top: 22px;
+  bottom: 92px;
+  width: 285px !important;
+  max-width: calc(100% - 100px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 40px #49432f14;
+  transform: none;
+  z-index: 12;
+}
+.atelier-editor aside#leftPanel {
+  left: 100px;
+}
+.atelier-editor aside#inspector {
+  right: 18px;
+}
+.atelier-editor .tabs {
+  background: var(--surface);
+}
+.atelier-editor .sec {
+  border-color: var(--line);
+  padding: 16px 14px 12px;
+}
+.atelier-editor .tabs button {
+  font-weight: 500;
+  padding: 14px 0;
+}
+.atelier-editor .tabs button.on {
+  color: var(--sage-deep);
+  border-bottom-color: var(--sage);
+}
+.atelier-editor .btn,
+.atelier-editor .iconbtn,
+.atelier-editor .tbtn,
+.atelier-editor .ibtn,
+.atelier-editor .item,
+.atelier-editor input,
+.atelier-editor select,
+.atelier-editor .txt,
+.atelier-editor .glass {
+  background-color: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.atelier-editor .btn.primary,
+.atelier-editor .edge-tog.hid {
+  background: var(--sage);
+  border-color: var(--sage);
+  color: white;
+}
+.atelier-editor .btn:hover,
+.atelier-editor .iconbtn:hover,
+.atelier-editor .item:hover,
+.atelier-editor .dropdown button:hover,
+.atelier-editor .rrow:hover {
+  background-color: var(--sage-soft);
+}
+.atelier-editor .dropdown,
+.atelier-editor .modal-box,
+.atelier-editor .fm-box {
+  background: var(--surface);
+}
+.atelier-editor .seg {
+  background: var(--linen);
+}
+.atelier-editor .seg button {
+  color: var(--muted);
+}
+.atelier-editor .seg button.on {
+  color: var(--sage-deep);
+  background: var(--sage-soft);
+  box-shadow: none;
+}
+.atelier-editor .atelier-views .seg button.on {
+  background: var(--sage);
+  color: white;
+}
+.atelier-editor .tips {
+  background: var(--linen);
+  color: var(--muted);
+}
+.atelier-editor .ins {
+  padding: 18px;
+}
+.atelier-editor .ins h3 {
+  font-size: 17px;
+  font-weight: 600;
+}
+.atelier-editor .fgrid {
+  gap: 12px;
+}
+.atelier-editor .fgrid input,
+.atelier-editor .fgrid select {
+  padding: 8px;
+  border-radius: 7px;
+}
+.atelier-editor label.row {
+  color: var(--ink);
+}
+.atelier-editor input {
+  accent-color: var(--sage);
+}
+.atelier-editor :is(button, input, select, canvas):focus-visible {
+  outline: 2px solid var(--sage);
+  outline-offset: 3px;
+}
+.atelier-editor .pop {
+  top: 205px !important;
+  left: auto;
+  right: 24px;
+  width: min(330px, calc(100% - 48px));
+}
+.atelier-editor .walk-ctl {
+  top: 150px;
+}
+.atelier-editor .pane .ov-br {
+  bottom: 88px;
+}
+.atelier-editor #pane2d .ov-tl {
+  top: 134px;
+  left: 32px;
+}
+.atelier-editor #pane2d .ov-tr {
+  top: 135px;
+  right: 24px;
+  bottom: auto;
+  left: auto;
+}
+.atelier-editor .fphint {
+  bottom: 85px;
+  max-width: 90%;
+  white-space: normal;
+}
+@media (max-width: 900px) {
+  .atelier-rail {
+    width: 70px;
+    padding: 22px 7px;
+    gap: 15px;
+  }
+  .atelier-nav {
+    width: 54px;
+    min-height: 64px;
+    font-size: 12px;
+  }
+  .atelier-nav .ui-icon {
+    width: 25px;
+    height: 25px;
+  }
+  .atelier-title {
+    top: 27px;
+    left: 24px;
+    max-width: calc(100% - 220px);
+  }
+  .atelier-title #planTitle {
+    font-size: 32px;
+  }
+  .atelier-views {
+    right: 20px;
+    top: 30px;
+  }
+  .atelier-views .seg button {
+    font-size: 12px;
+    padding: 7px 11px;
+  }
+  .atelier-toolbar {
+    gap: 2px;
+  }
+  .atelier-button {
+    padding: 9px;
+  }
+  .atelier-editor aside#leftPanel {
+    left: 80px;
+  }
+  .atelier-editor .app > footer {
+    display: flex;
+    padding-left: 84px;
+  }
+  .atelier-advanced #toolSeg button {
+    font-size: 12px;
+    gap: 4px;
+  }
+  .atelier-advanced #saveBtn,
+  .atelier-advanced #quoteBtn {
+    display: inline-flex;
+  }
+  .atelier-advanced #exportMenu > .btn {
+    font-size: 12px;
+  }
+}
+@media (max-width: 620px) {
+  .atelier-title {
+    max-width: calc(100% - 170px);
+    left: 18px;
+  }
+  .atelier-title #planTitle {
+    font-size: 27px;
+  }
+  .atelier-subtitle {
+    max-width: 160px;
+    font-size: 11px;
+  }
+  .atelier-views {
+    right: 12px;
+  }
+  .atelier-views .seg button {
+    padding: 7px 9px;
+  }
+  .atelier-toolbar {
+    bottom: 18px;
+  }
+  .atelier-toolbar .atelier-button {
+    width: 39px;
+    padding: 8px;
+  }
+  .atelier-toolbar .atelier-button > span:not(.ui-icon) {
+    display: none;
+  }
+  .atelier-advanced {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .atelier-editor *,
+  .atelier-editor *::before,
+  .atelier-editor *::after {
+    transition: none !important;
+  }
+}

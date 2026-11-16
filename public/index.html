@@ -9,7 +9,7 @@
   <body>
     <main id="file-entry" class="file-entry" hidden>
       <div class="brand">
-        <img src="./logo.svg" alt="" />
+        <img src="./icons/house.svg" alt="" />
         <span>HouseDIY<small>家居设计工作台</small></span>
       </div>
       <h1>打开 HouseDIY，继续设计。</h1>
@@ -25,7 +25,7 @@
     </main>
     <header class="shell-header">
       <button class="brand" id="home-button" title="返回项目">
-        <img src="./logo.svg" alt="" /><span
+        <img src="./icons/house.svg" alt="" /><span
           >HouseDIY<small>家居设计工作台</small></span
         >
       </button>
@@ -45,9 +45,19 @@
           aria-expanded="true"
           hidden
         >
-          AI 助手</button
-        ><button id="settings-button" class="quiet">
-          <span class="model-dot" id="model-dot"></span>模型设置
+          一起设计</button
+        ><button
+          id="settings-button"
+          class="quiet"
+          aria-label="模型设置"
+          title="模型设置"
+        >
+          <span
+            class="ui-icon"
+            style="--icon: url(&quot;./icons/gear-six.svg&quot;)"
+            aria-hidden="true"
+          ></span
+          ><span class="model-dot" id="model-dot"></span><span>模型设置</span>
         </button>
       </div>
     </header>
@@ -60,17 +70,23 @@
       <div class="start-grid">
         <button id="new-project" class="import-card">
           <div class="import-symbol">
-            <svg viewBox="0 0 120 100" aria-hidden="true">
-              <path d="M20 80V30L60 8l40 22v50L60 96Z" />
-              <path
-                d="m20 30 40 23 40-23M60 53v43M39 42V20M60 53l19-11v35L60 88"
-              />
-            </svg>
+            <span
+              class="ui-icon"
+              style="--icon: url(&quot;./icons/house.svg&quot;)"
+              aria-hidden="true"
+            ></span>
           </div>
           <div>
             <h2>导入户型图</h2>
             <p>上传图片，识别墙体和门窗<br />生成多套家具与风格方案</p>
-            <span class="card-link">开始设计 <span>↗</span></span>
+            <span class="card-link"
+              >开始设计
+              <span
+                class="ui-icon"
+                style="--icon: url(&quot;./icons/arrow-up-right.svg&quot;)"
+                aria-hidden="true"
+              ></span
+            ></span>
           </div>
         </button>
         <div class="continue-card">
@@ -89,7 +105,7 @@
       </div>
       <div id="project-list" class="project-grid"></div>
       <footer>
-        HouseDIY 0.1.4 · 设计器基于 house-plan-designer · 本地工作空间
+        HouseDIY 0.1.5 · 设计器基于 house-plan-designer · 本地工作空间
       </footer>
     </main>
     <main id="editor-view" hidden>
@@ -102,9 +118,16 @@
       </section>
       <aside id="chat-panel" aria-labelledby="chat-title">
         <div class="chat-heading">
-          <div>
-            <span class="small-label">一起设计</span>
-            <h2 id="chat-title">AI 助手</h2>
+          <div class="chat-brand">
+            <span
+              class="ui-icon"
+              style="--icon: url(&quot;./icons/leaf.svg&quot;)"
+              aria-hidden="true"
+            ></span>
+            <div>
+              <h2 id="chat-title">一起设计</h2>
+              <p>让家，更像你。</p>
+            </div>
           </div>
           <button
             id="close-chat"
@@ -112,47 +135,122 @@
             title="收起对话栏"
             aria-label="收起对话栏"
           >
-            ×
+            <span
+              class="ui-icon"
+              style="--icon: url(&quot;./icons/x.svg&quot;)"
+              aria-hidden="true"
+            ></span>
           </button>
         </div>
         <div id="chat-tools" class="chat-tools">
-          <button id="undo-ai" class="quiet">↶ 撤销</button
+          <button id="undo-ai" class="quiet">
+            <span
+              class="ui-icon"
+              style="
+                --icon: url(&quot;./icons/arrow-counter-clockwise.svg&quot;);
+              "
+              aria-hidden="true"
+            ></span
+            >撤销</button
           ><button id="check-plan" class="quiet">检查方案</button
           ><button id="export-plan" class="quiet">导出 JSON</button
           ><button id="show-underlay" class="quiet">原图</button>
         </div>
-        <details id="assumptions">
-          <summary>识图与尺寸待确认</summary>
-          <ul id="assumption-list"></ul>
-        </details>
-        <div id="layout-feedback" hidden>
-          <span id="layout-feedback-text"></span
-          ><button id="fix-layout" type="button" class="quiet">
-            请 AI 调整 →
-          </button>
-        </div>
-        <div id="messages" class="messages" aria-live="polite"></div>
-        <div id="pending-proposal" hidden></div>
         <div
-          id="chat-progress"
-          class="chat-progress"
-          role="status"
-          hidden
-        ></div>
+          id="chat-content"
+          class="chat-content"
+          role="region"
+          aria-label="设计对话与待确认修改"
+          tabindex="0"
+        >
+          <details id="assumptions">
+            <summary>识图与尺寸待确认</summary>
+            <ul id="assumption-list"></ul>
+          </details>
+          <div id="layout-feedback" hidden>
+            <span id="layout-feedback-text"></span
+            ><button id="fix-layout" type="button" class="quiet">
+              请 AI 调整 →
+            </button>
+          </div>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <section
+            id="selection-details"
+            class="selection-details"
+            hidden
+            aria-label="选中家具的配色"
+          >
+            <div class="selection-heading">
+              <span
+                class="ui-icon"
+                style="--icon: url(&quot;./icons/couch.svg&quot;)"
+                aria-hidden="true"
+              ></span
+              ><strong id="selection-name"></strong>
+            </div>
+            <div class="color-options" role="group" aria-label="家具颜色">
+              <button
+                type="button"
+                data-color="#e7dcc7"
+                data-color-name="暖米"
+                aria-label="换成暖米色"
+                aria-pressed="false"
+              >
+                <span style="background: #e7dcc7"></span>暖米
+              </button>
+              <button
+                type="button"
+                data-color="#c9bda6"
+                data-color-name="燕麦"
+                aria-label="换成燕麦色"
+                aria-pressed="false"
+              >
+                <span style="background: #c9bda6"></span>燕麦
+              </button>
+              <button
+                type="button"
+                data-color="#b4afa1"
+                data-color-name="亚麻"
+                aria-label="换成亚麻色"
+                aria-pressed="false"
+              >
+                <span style="background: #b4afa1"></span>亚麻
+              </button>
+            </div>
+            <p>先试试配色，随时可以撤销。</p>
+          </section>
+          <div id="pending-proposal" hidden></div>
+          <div
+            id="chat-progress"
+            class="chat-progress"
+            role="status"
+            hidden
+          ></div>
+        </div>
         <form id="chat-form">
           <div id="selection-chip" hidden></div>
           <label for="chat-input" class="sr-only">告诉 AI 你想怎样调整</label
           ><textarea
             id="chat-input"
-            rows="3"
-            placeholder="告诉我，你希望这里有什么变化？"
+            rows="1"
+            placeholder="说说你想怎样调整…"
           ></textarea>
           <div class="composer-bottom">
             <span>Enter 发送 · Shift + Enter 换行</span
             ><button id="stop-chat" type="button" class="secondary" hidden>
               停止</button
-            ><button id="send-chat" type="submit" class="primary">
-              发送 ↑
+            ><button
+              id="send-chat"
+              type="submit"
+              class="primary"
+              aria-label="发送消息"
+              title="发送消息"
+            >
+              <span
+                class="ui-icon"
+                style="--icon: url(&quot;./icons/paper-plane-tilt.svg&quot;)"
+                aria-hidden="true"
+              ></span>
             </button>
           </div>
         </form>

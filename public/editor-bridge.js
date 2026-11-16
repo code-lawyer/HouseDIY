@@ -118,6 +118,24 @@ window.addEventListener("DOMContentLoaded", async () => {
         } else if (action === "select") {
           D.select(payload.kind, payload.id);
           result = state();
+        } else if (action === "color") {
+          if (gesture) throw new Error("请先结束当前拖动");
+          const selection = D.app.sel;
+          if (selection.kind !== "furn" || selection.id !== payload.id)
+            throw new Error("选中的家具已变化，请重新选择颜色");
+          if (!/^#[a-f0-9]{6}$/i.test(payload.color))
+            throw new Error("颜色格式不正确");
+          const item = D.app.plan.furniture.find((f) => f.id === payload.id);
+          if (!item) throw new Error("选中的家具不存在");
+          const color = payload.color.toLowerCase();
+          const changed = item.color?.toLowerCase() !== color;
+          if (changed) {
+            item.color = color;
+            D.commit();
+            D.requestDraw();
+            if (D.S3.ready) D.S3.renderNow();
+          }
+          result = { changed };
         } else if (action === "underlay") {
           if (D.app.underlay) {
             D.app.underlay.visible = !D.app.underlay.visible;
@@ -135,14 +153,21 @@ window.addEventListener("DOMContentLoaded", async () => {
         plan: D.app.plan,
         underlay: state().underlay,
       }),
-      lastSelection = JSON.stringify(D.app.sel);
+      lastSelection = "";
     setInterval(() => {
       if (gesture) return;
       const plan = JSON.stringify({
           plan: D.app.plan,
           underlay: state().underlay,
         }),
-        sel = JSON.stringify(D.app.sel);
+        selectedFurniture = D.app.plan.furniture.find(
+          (f) => D.app.sel.kind === "furn" && f.id === D.app.sel.id,
+        ),
+        sel = JSON.stringify([
+          D.app.sel,
+          selectedFurniture?.name,
+          selectedFurniture?.color,
+        ]);
       if (plan !== lastPlan) {
         lastPlan = plan;
         post({ type: "changed" });
@@ -162,6 +187,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         post({
           type: "selection",
           selection,
+          color: selectedFurniture?.color || "",
           label:
             item?.name ||
             (selection.kind === "wall"

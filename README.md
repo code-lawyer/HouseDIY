@@ -6,7 +6,9 @@ HouseDIY 是 Windows 桌面家居设计工具：导入户型图或已有方案�
 
 [下载 Windows 版](https://github.com/code-lawyer/HouseDIY/releases/latest) · [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/code-lawyer/HouseDIY/issues) · [上游与许可](THIRD_PARTY_NOTICES.md)
 
-![HouseDIY 的 3D 编辑器与 AI 对话栏，使用公开示例方案](docs/images/editor.png)
+![HouseDIY 暖居工作台，使用公开示例方案](docs/images/editor-warm.jpg)
+
+截图展示 0.1.5 的暖居界面。配色、字体和交互约定见 [设计语言](docs/design-language.md)。
 
 ## 能做什么
 
@@ -18,9 +20,9 @@ HouseDIY 是 Windows 桌面家居设计工具：导入户型图或已有方案�
 
 ## 下载与开始使用
 
-当前版本为 **0.1.4 公开预览版**，提供 Windows x64 便携程序，无需安装 HouseDIY 的开发环境。
+**0.1.5 公开预览版**提供 Windows x64 便携程序，无需安装 HouseDIY 的开发环境。成品测试与 SHA-256 见[验收记录](docs/releases/0.1.5-local.md)。
 
-1. 从 [Releases](https://github.com/code-lawyer/HouseDIY/releases/latest) 下载 `HouseDIY-0.1.4-portable.exe`，双击启动。程序尚未代码签名；请核对仓库来源及随包提供的 SHA-256。
+1. 从 [v0.1.5 Release](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.5) 下载 `HouseDIY-0.1.5-portable.exe`，双击启动。程序尚未代码签名，请核对来源及随包提供的 SHA-256。
 2. 打开内置的「日光客厅 · 示例」，或导入 [示例 JSON](examples/demo-plan.json) 熟悉操作。
 3. 在「模型设置」里选择 Codex CLI 或外部 API。
 4. 导入自己的户型图，或导入原设计器导出的单层方案 JSON；在设计区选中对象后即可描述修改需求。

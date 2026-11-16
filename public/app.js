@@ -12,6 +12,7 @@ let current = null,
   workspaceLocked = false,
   controller = null,
   selectedImage = null,
+  selectedFurniture = null,
   pending = null,
   requestSequence = 0,
   loginController = null,
@@ -42,6 +43,12 @@ function toast(text) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("toast").hidden = true), 5500);
 }
+function fitComposer() {
+  const input = $("chat-input");
+  input.style.height = "auto";
+  input.style.height = Math.min(140, input.scrollHeight) + "px";
+}
+$("chat-input").addEventListener("input", fitComposer);
 function rpc(action, payload, session = current) {
   if (!session || session !== current || !session.active || !session.ready)
     return Promise.reject(new Error("设计器正在加载，请稍候"));
@@ -75,6 +82,7 @@ function lockWorkspace(locked, label) {
     "chat-form",
     "chat-tools",
     "pending-proposal",
+    "selection-details",
   ])
     $(id).inert = unavailable;
   $("home-button").disabled = locked;
@@ -135,10 +143,22 @@ window.addEventListener("message", async (event) => {
   if (data.type === "three-ready") showLayoutFeedback(data.issues);
   if (data.type === "changed") scheduleSave();
   if (data.type === "selection") {
+    const previousSelection = selectedFurniture;
     $("selection-chip").hidden = !data.label;
     $("selection-chip").textContent = data.label
       ? "已选中 · " + data.label
       : "";
+    selectedFurniture =
+      data.selection.kind === "furn" ? data.selection.id : null;
+    $("selection-details").hidden = !selectedFurniture;
+    $("selection-name").textContent = "已选中 · " + (data.label || "家具");
+    for (const button of document.querySelectorAll("[data-color]"))
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.color === data.color?.toLowerCase()),
+      );
+    if (selectedFurniture && selectedFurniture !== previousSelection)
+      $("selection-details").scrollIntoView({ block: "nearest" });
   }
   if (data.type === "error") {
     current.ready = false;
@@ -158,6 +178,33 @@ function clearPending() {
   $("pending-proposal").hidden = true;
   $("pending-proposal").replaceChildren();
 }
+for (const button of document.querySelectorAll("[data-color]")) {
+  button.onclick = async () => {
+    const session = current;
+    const id = selectedFurniture;
+    if (!id || workspaceLocked) return;
+    try {
+      requireSession(session);
+      const { changed } = await rpc(
+        "color",
+        { id, color: button.dataset.color },
+        session,
+      );
+      requireSession(session);
+      if (!changed) {
+        toast("已经是" + button.dataset.colorName + "色，未作修改。");
+        return;
+      }
+      await saveNow("配色：" + button.dataset.colorName, session);
+      await recordAction(
+        session,
+        "已调整家具颜色为" + button.dataset.colorName + "色。可以用撤销回退。",
+      );
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+}
 function showLayoutFeedback(issues = []) {
   const count = issues.filter((i) => i.level === "error").length;
   $("layout-feedback").hidden = !count;
@@ -167,17 +214,22 @@ function showLayoutFeedback(issues = []) {
 $("fix-layout").onclick = () => {
   $("chat-input").value =
     "请根据当前检查结果，优先解决家具重叠和嵌入墙体的问题。只调整相关家具，保留墙体、门窗和其他布置。";
+  fitComposer();
   $("chat-input").focus();
 };
 function appendMessage(role, content, kind) {
   const msg = make("div", "message " + (kind || role));
   if (!kind)
     msg.append(
-      make("span", "message-label", role === "user" ? "你" : "HOUSEDIY"),
+      make(
+        "span",
+        "message-label",
+        role === "user" ? "你" : "HouseDIY · 设计助手",
+      ),
     );
   msg.append(make("span", "message-content", content));
   $("messages").append(msg);
-  $("messages").scrollTop = $("messages").scrollHeight;
+  msg.scrollIntoView({ block: "end" });
   return msg;
 }
 function renderMessages() {
@@ -187,11 +239,11 @@ function renderMessages() {
   if (!messages.length) {
     const welcome = make("div", "chat-welcome");
     welcome.append(
-      make("h3", "", "把想法说出来，\n我们一起调整。"),
+      make("h3", "", "家的样子，\n从你的想法开始。"),
       make(
         "p",
         "",
-        "你可以先在画面里选中家具，再告诉我怎样改；也可以直接描述房间里的需求。",
+        "选一件家具，或者聊聊你期待的生活。我们一起，把想法慢慢落到实处。",
       ),
     );
     for (const text of [
@@ -203,6 +255,7 @@ function renderMessages() {
       b.type = "button";
       b.onclick = () => {
         $("chat-input").value = text;
+        fitComposer();
         $("chat-input").focus();
       };
       welcome.append(b);
@@ -237,6 +290,7 @@ async function openProject(projectId, variantId) {
   });
   current = session;
   $("home-view").hidden = true;
+  document.body.classList.add("editing");
   $("editor-view").hidden = false;
   $("project-toolbar").hidden = false;
   $("toggle-chat").hidden = false;
@@ -255,8 +309,11 @@ async function openProject(projectId, variantId) {
   $("assumptions").hidden = !project.assumptions.length;
   $("show-underlay").hidden = !project.underlay;
   $("selection-chip").hidden = true;
+  selectedFurniture = null;
+  $("selection-details").hidden = true;
   $("layout-feedback").hidden = true;
   $("chat-input").value = "";
+  fitComposer();
   renderMessages();
   saveLabel("正在打开…");
   $("editor-loading").replaceChildren(
@@ -278,6 +335,9 @@ async function goHome() {
     $("project-toolbar").hidden = true;
     $("toggle-chat").hidden = true;
     $("home-view").hidden = false;
+    document.body.classList.remove("editing");
+    selectedFurniture = null;
+    $("selection-details").hidden = true;
     await renderProjects();
   });
 }
@@ -285,7 +345,7 @@ function drawPreview(canvas, plan) {
   const ctx = canvas.getContext("2d");
   canvas.width = 660;
   canvas.height = 332;
-  ctx.fillStyle = "#eef2f6";
+  ctx.fillStyle = "#eeeadf";
   ctx.fillRect(0, 0, 660, 332);
   if (!plan.nodes.length) return;
   const xs = plan.nodes.map((n) => n.x),
@@ -318,7 +378,7 @@ function drawPreview(canvas, plan) {
     const a = nodes.get(wall.a),
       b = nodes.get(wall.b);
     if (!a || !b) continue;
-    ctx.strokeStyle = wall.bearing ? "#667b95" : "#8ea0b6";
+    ctx.strokeStyle = wall.bearing ? "#68715e" : "#a4aa96";
     ctx.lineWidth = Math.max(2, wall.t * scale);
     ctx.beginPath();
     ctx.moveTo(ox + a.x * scale, oy + a.y * scale);
@@ -455,6 +515,7 @@ function showProposal(session, proposal, expected, baseRevision) {
   };
   box.append(ul, apply, reject);
   box.hidden = false;
+  reject.scrollIntoView({ block: "nearest" });
 }
 $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -488,6 +549,7 @@ $("chat-form").addEventListener("submit", async (event) => {
     appendMessage("user", message);
     session.variant.messages.push({ role: "user", content: message });
     $("chat-input").value = "";
+    fitComposer();
     $("chat-progress").textContent = "正在准备当前方案…";
     let streamed = "";
     const checks = await rpc("checks", undefined, session);
@@ -509,7 +571,7 @@ $("chat-form").addEventListener("submit", async (event) => {
           streamed += event.text;
           if (!assistant) assistant = appendMessage("assistant", "");
           assistant.querySelector(".message-content").textContent = streamed;
-          $("messages").scrollTop = $("messages").scrollHeight;
+          assistant.scrollIntoView({ block: "end" });
         }
       },
     );

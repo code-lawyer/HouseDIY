@@ -46,6 +46,19 @@ audit of the embedded editor.
 This desktop directory is the product scope. The parent workspace includes
 private user plans and unrelated experiments, which must not be distributed.
 
+## Interface icons and typography
+
+The interface uses selected **Phosphor Icons 2.1.1**, Light weight, under MIT.
+Source: https://github.com/phosphor-icons/core. The exact assets were retrieved
+from the versioned `@phosphor-icons/core@2.1.1` package and are bundled in
+`public/icons/`, with the original license in `public/icons/LICENSE`.
+
+**Noto Sans SC** is bundled for offline Chinese UI text under the SIL Open Font
+License 1.1. Source: https://github.com/google/fonts/tree/main/ofl/notosanssc.
+`public/fonts/noto-sans-sc.ttf` is a weight-400 instance of the upstream variable
+font, generated with fontTools; the license is `public/fonts/OFL.txt`.
+Display headings use installed Chinese serif fonts, with system fallbacks.
+
 ## Electron and Chromium
 
 Electron is MIT licensed. The packaged runtime includes Electron's `LICENSE.electron.txt`
