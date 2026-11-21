@@ -94,12 +94,29 @@ try {
   });
   const shot = (name) =>
     page.screenshot({ path: join(directory, name + ".png") });
-  const ready = async () => {
-    await page.waitForFunction(
-      () =>
-        !document.querySelector("#editor-view").hidden &&
-        document.querySelector("#editor-loading").hidden,
+  const ready = async (variantId = null) => {
+    const status = await page.waitForFunction(
+      (expectedVariantId) => {
+        if (document.querySelector("#editor-view").hidden) return false;
+        const editor = document.querySelector("#designer");
+        if (
+          expectedVariantId &&
+          !new URL(editor.src, location.href).pathname.endsWith(
+            `/${expectedVariantId}`,
+          )
+        )
+          return false;
+        const loading = document.querySelector("#editor-loading");
+        if (loading.hidden) return true;
+        return loading.querySelector("button") ? loading.innerText : false;
+      },
+      // Cold loads of the software renderer can exceed Puppeteer's default on CI.
+      { timeout: 90000, polling: 100 },
+      variantId,
     );
+    const result = await status.jsonValue();
+    await status.dispose();
+    assert.equal(result, true, String(result));
     const frame = await (await page.$("#designer")).contentFrame();
     await frame.waitForFunction(
       () =>
@@ -367,9 +384,9 @@ try {
   );
   await applySwatch();
   await page.select("#variant-select", first.id);
-  frame = await ready();
+  frame = await ready(first.id);
   await page.select("#variant-select", second.id);
-  frame = await ready();
+  frame = await ready(second.id);
   assert.equal(
     await frame.evaluate(() => window.__designer.app.plan.furniture[0].color),
     swatchColor,
