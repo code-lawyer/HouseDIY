@@ -131,20 +131,30 @@ try {
     return frame;
   };
   const open = async (name) => {
-    await page.waitForSelector(".project-card");
-    await page.evaluate(
-      (name) =>
-        [...document.querySelectorAll(".project-card")]
-          .find((e) => e.textContent.includes(name))
-          .click(),
+    const card = await page.waitForFunction(
+      (name) => {
+        if (
+          document.querySelector("#home-view").hidden ||
+          document.querySelector("#home-button").disabled
+        )
+          return false;
+        return [...document.querySelectorAll(".project-card")].find((button) =>
+          button.querySelector("h3").textContent.includes(name),
+        );
+      },
+      { polling: 100 },
       name,
     );
+    await card.evaluate((button) => button.click());
+    await card.dispose();
     return ready();
   };
   const home = async () => {
     await page.click("#home-button");
     await page.waitForFunction(
-      () => !document.querySelector("#home-view").hidden,
+      () =>
+        !document.querySelector("#home-view").hidden &&
+        !document.querySelector("#home-button").disabled,
     );
     await page.waitForSelector(".project-card");
   };
