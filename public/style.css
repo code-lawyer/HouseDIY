@@ -847,6 +847,71 @@ label small {
     animation-duration: 2s;
   }
 }
+.project-entry {
+  position: relative;
+  min-width: 0;
+}
+.project-entry .project-card {
+  width: 100%;
+  height: 100%;
+  padding-bottom: 48px;
+}
+.project-delete {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  font-size: 12px;
+}
+.project-list-actions {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: 16px;
+  color: var(--muted);
+}
+.empty-projects {
+  grid-column: 1 / -1;
+  padding: 24px 0;
+  color: var(--muted);
+}
+.trash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+.trash-row strong {
+  overflow-wrap: anywhere;
+}
+.trash-row button {
+  flex: none;
+}
+#trash-list {
+  max-height: 55vh;
+  overflow: auto;
+}
+#delete-error {
+  color: var(--danger);
+}
+.design-scope {
+  padding: 10px 18px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.design-scope summary {
+  cursor: pointer;
+}
+.design-scope label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.design-scope input {
+  width: auto;
+}
 .connection-card {
   padding: 16px;
   border: 1px solid var(--line);
@@ -891,11 +956,18 @@ label small {
   font-size: 12px;
   color: var(--warning);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 5px;
 }
+#layout-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 #layout-feedback button {
+  min-block-size: 24px;
   font-size: 12px;
   padding: 5px;
   color: var(--warning);
@@ -1119,10 +1191,10 @@ body {
 }
 #home-view {
   max-width: 1260px;
-  padding: 70px 56px 35px;
+  padding: clamp(24px, 4vh, 48px) 56px 35px;
 }
 .home-intro {
-  margin: 0 0 46px;
+  margin: 0 0 24px;
 }
 .home-intro h1 {
   font: 600 clamp(30px, 3.3vw, 44px)/1.55 var(--font-display);
@@ -1145,7 +1217,7 @@ body {
 .import-card {
   border: 0;
   border-radius: 20px;
-  padding: 40px 32px;
+  padding: 24px 28px;
   background: var(--linen);
   gap: 28px;
 }
@@ -1180,7 +1252,7 @@ body {
   height: 20px;
 }
 .continue-card {
-  padding: 30px 0 24px 34px;
+  padding: 8px 0 8px 28px;
   background: transparent;
   border: 0;
   border-left: 1px solid var(--line);
@@ -1200,7 +1272,7 @@ body {
   font-size: 13px;
 }
 .section-row {
-  margin: 48px 0 22px;
+  margin: 28px 0 15px;
 }
 .section-row h2 {
   font-size: 17px;
@@ -1215,15 +1287,16 @@ body {
   border-radius: 14px;
 }
 .project-preview {
-  height: 190px;
+  height: clamp(112px, 18vh, 170px);
   border-radius: 14px;
   overflow: hidden;
 }
 .project-preview canvas {
-  height: 190px;
+  height: 100%;
+  object-fit: contain;
 }
 .project-card-body {
-  padding: 18px 2px;
+  padding: 10px 2px;
 }
 .project-card h3 {
   font-size: 14px;
@@ -1231,6 +1304,39 @@ body {
 }
 .project-card:hover .project-preview {
   box-shadow: inset 0 0 0 2px var(--sage);
+}
+.file-diagnostics {
+  font-size: 13px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  border-left: 3px solid var(--warning);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.file-diagnostics summary {
+  cursor: pointer;
+}
+.file-diagnostics button {
+  margin: 4px;
+}
+.check-group {
+  margin-top: 9px;
+}
+.check-group summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.check-group ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.check-group li {
+  margin: 8px 0;
+}
+.check-group button {
+  display: block;
+  color: var(--sage-deep);
+  text-decoration: underline;
 }
 .project-card .arrow {
   width: 28px;
@@ -1722,4 +1828,27 @@ select {
   *::after {
     transition: none !important;
   }
+}
+.recovery-actions,
+.repair-fields {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+#repair-form label {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0;
+}
+.repair-fields label {
+  flex: 1 1 44%;
+  min-width: 0;
+}
+#repair-form input,
+#repair-form select {
+  width: 100%;
+  box-sizing: border-box;
+}
+#repair-error:empty {
+  display: none;
 }

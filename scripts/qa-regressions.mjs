@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { startServer } from "../src/server.mjs";
 import { demoPlan, applyOperations } from "../src/model.mjs";
-import { mockProvider } from "../tests/mock-provider.mjs";
+import { mockProvider, recognition } from "../tests/mock-provider.mjs";
 
 const directory = resolve(
   process.env.HOUSEDIY_REGRESSION_DIR || ".qa/regressions",
@@ -32,6 +32,11 @@ partition.status = "existing";
 const wallProject = app.store.create({
   name: "隔墙改造验收",
   variants: [{ name: "原始隔墙", plan: partitionPlan }],
+});
+app.store.setDesignPreferences(wallProject.id, {
+  lifecycle: 0,
+  layoutLocked: false,
+  allowFreestandingStorage: false,
 });
 const checks = [],
   errors = [],
@@ -98,7 +103,8 @@ try {
     const frame = await (await page.$("#designer")).contentFrame();
     await frame.waitForFunction(
       () =>
-        window.__designer?.S3.ready &&
+        window.__designer &&
+        (window.__designer?.S3.ready || window.__designer.app.view === "2d") &&
         !window.__designer.app.transitioning &&
         !window.__designer.S3.isAnimating(),
     );
@@ -144,6 +150,15 @@ try {
   await page.goto(app.url);
   await page.waitForSelector(".project-card");
   await shot("home-1600");
+  await page.setViewport({ width: 1366, height: 768 });
+  assert.ok(
+    await page.$eval(
+      ".project-card h3",
+      (h) => h.getBoundingClientRect().bottom <= innerHeight,
+    ),
+  );
+  pass("Recent projects are named on the first laptop screen");
+  await page.setViewport({ width: 1600, height: 980 });
   let frame = await open("日光客厅");
   const initialPose = await pose(frame);
   await pause(2100);
@@ -420,6 +435,17 @@ try {
     d.select("furn", d.app.plan.furniture[0].id);
   });
   await page.waitForSelector("#selection-details", { visible: true });
+  await page.click("#design-scope summary");
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith("/preferences") && r.status() === 200,
+    ),
+    page.click("#layout-locked"),
+  ]);
+  await page.click("#design-scope summary");
+  mock.enqueueOperations([
+    { op: "add_wall", a: [200, 2800], b: [1500, 2800], t: 100 },
+  ]);
   await send("添加一段隔墙");
   await page.waitForSelector("#pending-proposal", { visible: true });
   await chatDone();
@@ -613,6 +639,273 @@ try {
   );
 
   await home();
+  const draft = structuredClone(recognition);
+  draft.name = "橱柜位置复核";
+  draft.schemes[0].furniture = [{ key: "counter", at: [200, 54.4] }];
+  mock.enqueueRecognition(draft, draft);
+  await page.click("#new-project");
+  await (await page.$("#floorplan-file")).uploadFile(inputFile);
+  await page.waitForSelector("#image-preview", { visible: true });
+  await page.select("#scheme-count", "1");
+  await page.click("#generate-button");
+  frame = await ready();
+  assert.equal(await frame.evaluate(() => window.__designer.app.view), "3d");
+  const { projectId: draftId, variantId: draftVariant } = await frame.evaluate(
+    () => window.__HOUSEDIY__,
+  );
+  await page.waitForSelector("#locate-layout-issues", { visible: true });
+  await page.focus("#locate-layout-issues");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#messages .message:last-child")
+      ?.textContent.includes("约 56 mm"),
+  );
+  const locateCabinet = await page.evaluateHandle(() =>
+    [...document.querySelectorAll("#messages .message:last-child li")]
+      .find((row) => row.textContent.includes("约 56 mm"))
+      ?.querySelector("button"),
+  );
+  assert.equal(
+    await page.$$eval(
+      "#messages .message:last-child li",
+      (rows) => rows.filter((r) => /嵌入.*56\s*mm/.test(r.textContent)).length,
+    ),
+    1,
+  );
+  await locateCabinet.asElement().click();
+  await frame.waitForFunction(() => {
+    const { view, transitioning, plan, sel } = window.__designer.app;
+    return view === "2d" && !transitioning && sel.id === plan.furniture[0].id;
+  });
+  await shot("editable-import-check");
+  await frame.click('.atelier-toolbar [aria-controls="inspector"]');
+  await frame.click('#inspector input[data-k="y"]');
+  await page.keyboard.down("Control");
+  await page.keyboard.press("a");
+  await page.keyboard.up("Control");
+  await page.keyboard.type("650");
+  await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().endsWith(`/variants/${draftVariant}/save`) && r.ok(),
+    ),
+    page.keyboard.press("Tab"),
+  ]);
+  assert.equal(
+    app.store.variant(draftId, draftVariant).v.plan.furniture[0].y,
+    650,
+  );
+  const beforeRecheck = await page.$$eval(
+    "#messages .message",
+    (items) => items.length,
+  );
+  await page.click("#check-plan");
+  await page.waitForFunction(
+    (count) => document.querySelectorAll("#messages .message").length > count,
+    {},
+    beforeRecheck,
+  );
+  assert.doesNotMatch(
+    await page.$eval("#messages .message:last-child", (el) => el.textContent),
+    /嵌入墙体/,
+  );
+  await home();
+  frame = await open(draft.name);
+  assert.equal(
+    await frame.evaluate(() => window.__designer.app.plan.furniture[0].y),
+    650,
+  );
+  pass(
+    "A 56 mm cabinet clash opens in 3D, locates in 2D, and can be edited, checked and reopened",
+  );
+
+  await home();
+  const orphan = structuredClone(recognition);
+  orphan.name = "门窗待定位验收";
+  orphan.openings.push({
+    wall: 99,
+    type: "door",
+    center: [300, 430],
+    width: 900,
+  });
+  mock.enqueueRecognition(orphan, orphan);
+  const importImage = async (button = "#generate-button") => {
+    await page.click("#new-project");
+    await (await page.$("#floorplan-file")).uploadFile(inputFile);
+    await page.waitForSelector("#image-preview", { visible: true });
+    await page.select("#scheme-count", "1");
+    await page.click(button);
+  };
+  await importImage();
+  frame = await ready();
+  assert.equal(await frame.evaluate(() => window.__designer.app.view), "3d");
+  await page.waitForSelector("#pending-list button", { visible: true });
+  await page.click("#pending-list button");
+  await page.waitForSelector("#repair-wall", { visible: true });
+  await frame.waitForSelector(".opening-markers button", { visible: true });
+  await page.click("#cancel-repair");
+  await frame.click(".opening-markers button");
+  await page.waitForSelector("#repair-wall", { visible: true });
+  const targetWall = await frame.evaluate(
+    () => window.__designer.app.plan.walls[2].id,
+  );
+  await page.select("#repair-wall", targetWall);
+  assert.equal(await page.$eval("#repair-pos", (e) => e.value), "2800");
+  await shot("assign-opening");
+  await page.click('#repair-form [type="submit"]');
+  await frame.waitForFunction(
+    () => window.__designer.app.plan.openings.length === 2,
+  );
+  await page.waitForFunction(
+    () => document.querySelector("#editor-loading").hidden,
+  );
+  await page.click("#undo-ai");
+  await page.waitForSelector("#pending-list button", { visible: true });
+  await page.waitForFunction(
+    () => document.querySelector("#editor-loading").hidden,
+  );
+  await page.click("#pending-list button");
+  await page.waitForSelector("#repair-wall", { visible: true });
+  await page.select("#repair-wall", targetWall);
+  await page.click('#repair-form [type="submit"]');
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#editor-loading").hidden &&
+      document.querySelector("#pending-openings").hidden,
+  );
+  await home();
+  frame = await open(orphan.name);
+  assert.deepEqual(
+    await frame.evaluate(() => {
+      const { plan, view } = window.__designer.app;
+      return [
+        view,
+        plan.walls.length,
+        plan.openings.length,
+        plan.openings.at(-1).wall,
+        plan.pendingOpenings.length,
+      ];
+    }),
+    ["3d", 4, 2, targetWall, 0],
+  );
+  pass(
+    "An orphan door is marked on the underlay, assigned to the chosen wall, undone, saved and reopened in 3D",
+  );
+
+  await home();
+  mock.enqueueRecognition({ walls: [] }, { walls: [] });
+  await importImage();
+  frame = await ready();
+  assert.deepEqual(
+    await frame.evaluate(() => {
+      const a = window.__designer.app;
+      return [a.view, a.plan.walls.length, a.underlay.visible];
+    }),
+    ["2d", 0, true],
+  );
+  const sourceId = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
+  await page.waitForSelector("#retry-source", { visible: true });
+  assert.equal(
+    await page.$eval("#retry-source", (b) => b.textContent),
+    "重新识别原图",
+  );
+  await shot("saved-source");
+  const savedCount = app.store.list().length;
+  await page.click("#retry-source");
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#project-name").textContent === "验收户型" &&
+      document.querySelector("#trace-source").hidden,
+  );
+  frame = await ready();
+  assert.equal(
+    await frame.evaluate(() => window.__HOUSEDIY__.projectId),
+    sourceId,
+  );
+  assert.equal(await frame.evaluate(() => window.__designer.app.view), "3d");
+  assert.equal(app.store.list().length, savedCount);
+  pass(
+    "When no walls are recognized the source opens in 2D and can be recognized again in the very same project",
+  );
+
+  await home();
+  const modelCalls = mock.requests.length;
+  await importImage("#manual-import");
+  frame = await ready();
+  assert.equal(mock.requests.length, modelCalls);
+  await page.click("#calibrate-source");
+  await frame.waitForFunction(() => window.__designer.app.tool === "calibrate");
+  await page.click("#trace-wall");
+  await frame.waitForFunction(() => window.__designer.app.tool === "wall");
+  const canvas = await frame.$("#c2d");
+  const box = await canvas.boundingBox();
+  await page.mouse.click(box.x + box.width * 0.32, box.y + box.height * 0.55);
+  await page.mouse.click(box.x + box.width * 0.7, box.y + box.height * 0.55);
+  await page.keyboard.press("Escape");
+  await frame.waitForFunction(
+    () => window.__designer.app.plan.walls.length > 0,
+  );
+  await frame.click('#viewSeg [data-view="3d"]');
+  await frame.waitForFunction(
+    () =>
+      window.__designer.app.view === "3d" &&
+      !window.__designer.app.transitioning,
+  );
+  const tracedId = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
+  await home();
+  assert.equal(app.store.get(tracedId).variants[0].plan.walls.length, 1);
+  frame = await open("transparent-input");
+  assert.equal(await frame.evaluate(() => window.__designer.app.view), "3d");
+  await page.waitForFunction(() =>
+    document.querySelector("#retry-source").textContent.includes("另建"),
+  );
+  await page.click("#retry-source");
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#trace-source").hidden &&
+      document.querySelector("#project-name").textContent === "验收户型",
+  );
+  frame = await ready();
+  assert.notEqual(
+    await frame.evaluate(() => window.__HOUSEDIY__.projectId),
+    tracedId,
+  );
+  assert.equal(app.store.get(tracedId).variants[0].plan.walls.length, 1);
+  pass(
+    "A user can trace real walls with no model connection, reopen them in 3D and keep them when requesting a separate recognition",
+  );
+
+  for (const duringCorrection of [false, true]) {
+    await home();
+    if (duringCorrection) mock.enqueueRecognition(draft, draft);
+    let held = mock.holdNextResponse();
+    await importImage();
+    await held.received;
+    if (duringCorrection) {
+      const next = mock.holdNextResponse();
+      held.release();
+      await next.received;
+      held = next;
+    }
+    try {
+      await page.waitForSelector("#cancel-generate", { visible: true });
+      await page.click("#cancel-generate");
+      frame = await ready();
+      const state = await frame.evaluate(() => [
+        window.__designer.app.view,
+        window.__designer.app.plan.walls.length,
+      ]);
+      assert.deepEqual(state, duringCorrection ? ["3d", 4] : ["2d", 0]);
+    } finally {
+      held.release();
+      await held.completed;
+    }
+  }
+  pass(
+    "Stopping initial recognition opens the saved 2D source, and stopping a correction opens the already saved 3D draft",
+  );
+
+  await home();
   frame = await open("日光客厅");
   const layouts = [];
   for (const [width, height] of [
@@ -656,6 +949,34 @@ try {
   pass(
     "Desktop, laptop, minimum window and enlarged-UI layouts keep send/settings controls visible without horizontal overflow",
   );
+  await page.setViewport({ width: 1120, height: 710 });
+  await frame.click('#viewSeg [data-view="split"]');
+  await frame.waitForFunction(
+    () =>
+      document
+        .querySelector('#viewSeg [data-view="split"]')
+        .getAttribute("aria-pressed") === "true" &&
+      !window.__designer.app.transitioning,
+  );
+  await frame.click('.atelier-nav[data-panel="furn"]');
+  await page.waitForFunction(
+    () => document.querySelector("#chat-panel").hidden,
+  );
+  await frame.waitForFunction(() => {
+    const box = (id) => document.querySelector(id).getBoundingClientRect();
+    return (
+      box("#leftPanel").right <= box("#pane2d").left + 1 &&
+      box(".atelier-title").bottom <= box("#pane2d").top &&
+      box("#pane2d").bottom <= box(".atelier-toolbar").top + 1
+    );
+  });
+  await frame.click('.atelier-nav[data-panel="furn"]');
+  await page.waitForFunction(
+    () => !document.querySelector("#chat-panel").hidden,
+  );
+  pass(
+    "Split view keeps the library and drawing controls outside the canvas and restores chat",
+  );
   await page.setViewport({ width: 1366, height: 768 });
   await page.click("#close-chat");
   assert.equal(
@@ -681,6 +1002,47 @@ try {
   assert.deepEqual(errors, []);
   pass(
     "Dialogs are named and keyboard dismissible; no uncaught renderer errors across the flows",
+  );
+  const legacyWallPlan = demoPlan();
+  const legacyWall = legacyWallPlan.walls[0];
+  delete legacyWall.bearing;
+  const legacy = app.store.create({
+    name: "待核实墙体测试",
+    variants: [{ name: "旧结构", plan: legacyWallPlan }],
+  });
+  await home();
+  frame = await open(legacy.name);
+  await frame.evaluate(
+    (id) => window.__designer.select("wall", id),
+    legacyWall.id,
+  );
+  await frame.click('button[aria-controls="inspector"][aria-label="属性"]');
+  await frame.waitForFunction(() =>
+    document
+      .querySelector("#inspector")
+      .innerText.includes("承重待核实，暂不可拆除"),
+  );
+  assert.equal(await frame.$("#wDel"), null);
+  pass(
+    "An imported wall of unknown structure is labelled and protected in the manual renovation inspector",
+  );
+  writeFileSync(
+    join(app.store.directory, "projects", "f0f0f0f0f0f0f0f0.json"),
+    "{",
+  );
+  await home();
+  await page.click("#project-diagnostics summary");
+  assert.match(
+    await page.$eval("#project-diagnostics", (el) => el.innerText),
+    /f0f0f0f0f0f0f0f0\.json/,
+  );
+  await page.click("#open-trash");
+  await page.waitForSelector("#trash-diagnostics:not([hidden])");
+  await page.keyboard.press("Escape");
+  await open("日光客厅");
+  assert.deepEqual(errors, []);
+  pass(
+    "A damaged project is identified in both lists while healthy projects still open",
   );
 } catch (error) {
   if (browser) {

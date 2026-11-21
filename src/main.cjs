@@ -46,15 +46,19 @@ if (!locked) {
     .whenReady()
     .then(async () => {
       const { startServer } = await import("./server.mjs");
-      if (!(await safeStorage.isAsyncEncryptionAvailable()))
-        throw new Error("系统密钥存储不可用，无法安全保存模型配置。");
-      const codec = {
-        encrypt: async (text) =>
-          (await safeStorage.encryptStringAsync(text)).toString("base64"),
-        decrypt: async (text) =>
-          (await safeStorage.decryptStringAsync(Buffer.from(text, "base64")))
-            .result,
-      };
+      const { maxPlanFileBytes } = await import("./model-assets.mjs");
+      const codec = (await safeStorage.isAsyncEncryptionAvailable())
+        ? {
+            encrypt: async (text) =>
+              (await safeStorage.encryptStringAsync(text)).toString("base64"),
+            decrypt: async (text) =>
+              (
+                await safeStorage.decryptStringAsync(
+                  Buffer.from(text, "base64"),
+                )
+              ).result,
+          }
+        : undefined;
       service = await startServer({
         dataDir: path.join(app.getPath("userData"), "workspace"),
         secretCodec: codec,
@@ -146,8 +150,11 @@ if (!locked) {
           event.senderFrame !== window.webContents.mainFrame
         )
           throw new Error("无效请求");
-        if (typeof text !== "string" || text.length > 16_000_000)
-          throw new Error("文件过大");
+        if (
+          typeof text !== "string" ||
+          Buffer.byteLength(text) > maxPlanFileBytes
+        )
+          throw new Error("方案超过 96 MB，请备份整个 workspace 目录");
         const result = await dialog.showSaveDialog(window, {
           defaultPath: String(name).replace(/[<>:"/\\|?*]/g, "_") + ".json",
           filters: [{ name: "设计方案", extensions: ["json"] }],

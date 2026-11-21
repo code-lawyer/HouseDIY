@@ -1,23 +1,9 @@
 // One operation contract for Codex, compatible APIs and the local executor.
+import { openingTypes } from "./opening-placement.mjs";
+export { openingTypes };
 const str = { type: "string" };
 const num = { type: "number" };
 const point = { type: "array", items: num, minItems: 2, maxItems: 2 };
-export const openingTypes = [
-  "door",
-  "double",
-  "unequal",
-  "sliding",
-  "folding",
-  "pocket",
-  "hole",
-  "window",
-  "slideWindow",
-  "floorWindow",
-  "highWindow",
-  "bay",
-  "garage",
-  "glassWall",
-];
 const opening = {
   type: { type: "string", enum: openingTypes },
   pos: num,
@@ -39,7 +25,11 @@ export const operationDefinitions = {
   add_furniture: define({ key: str, ...furniture }, ["key", "x", "y"]),
   update_furniture: define({ id: str, ...furniture }, ["id"]),
   remove_furniture: define({ id: str }, ["id"]),
-  update_room: define({ id: str, name: str, mat: str, wallMat: str }, ["id"]),
+  update_room: define(
+    { id: str, name: str, x: num, y: num, mat: str, wallMat: str },
+    ["id"],
+  ),
+  add_room: define({ name: str, x: num, y: num }, ["name", "x", "y"]),
   add_wall: define({ a: point, b: point, t: num }, ["a", "b"]),
   update_wall: define({ id: str, a: point, b: point, t: num }, ["id"]),
   remove_wall: define({ id: str }, ["id"]),

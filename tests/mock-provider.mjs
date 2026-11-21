@@ -40,6 +40,8 @@ export const recognition = {
 export async function mockProvider() {
   let delay = 0;
   let nextHeldResponse = null;
+  const scriptedOperations = [],
+    scriptedRecognition = [];
   const requests = [];
   const server = createServer(async (req, res) => {
     let text = "";
@@ -60,7 +62,8 @@ export async function mockProvider() {
       }
       let content = "OK",
         calls;
-      if (!data.stream) content = JSON.stringify(recognition);
+      if (!data.stream)
+        content = JSON.stringify(scriptedRecognition.shift() ?? recognition);
       else if (data.tools) {
         const message = String(
             data.messages.findLast((m) => m.role === "user").content,
@@ -85,6 +88,7 @@ export async function mockProvider() {
               color: "#d4c5af",
             },
           ];
+        if (scriptedOperations.length) operations = scriptedOperations.shift();
         calls = [
           {
             index: 0,
@@ -132,6 +136,9 @@ export async function mockProvider() {
   return {
     url: "http://127.0.0.1:" + server.address().port + "/v1",
     requests,
+    enqueueOperations: (...responses) => scriptedOperations.push(...responses),
+    enqueueRecognition: (...responses) =>
+      scriptedRecognition.push(...responses),
     setDelay: (ms) => (delay = ms),
     holdNextResponse: () => {
       if (nextHeldResponse) throw new Error("A response is already held");

@@ -15,12 +15,16 @@ import {
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { captureNativeWindow } from "./electron-qa.mjs";
+import { mockProvider, recognition } from "../tests/mock-provider.mjs";
 
 const directory = resolve(process.env.HOUSEDIY_STARTUP_DIR || ".qa/packaged");
 mkdirSync(directory, { recursive: true });
 const data = mkdtempSync(join(directory, "data-"));
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
-const executable = resolve(`release/HouseDIY-${version}-portable.exe`);
+const executable = resolve(
+  process.env.HOUSEDIY_PACKAGE_PATH ||
+    `release/HouseDIY-${version}-portable.exe`,
+);
 assert.ok(existsSync(executable), "Build the current version first");
 const fixturePath = resolve(
   process.env.HOUSEDIY_PLAN_FIXTURE || "examples/demo-plan.json",
@@ -69,6 +73,7 @@ let page;
 let debuggerSocket;
 let child;
 let log;
+let localVision;
 const capture = (name) =>
   captureNativeWindow(debuggerSocket, join(directory, name));
 try {
@@ -110,11 +115,9 @@ try {
   page = pages.find((p) => p.url().includes("127.0.0.1"));
   assert.ok(page, "Application opened through the local service");
   page.on("pageerror", (error) => results.errors.push(error.message));
+  const failedRequests = [];
   page.on("requestfailed", (request) => {
-    results.networkErrors.push({
-      path: new URL(request.url()).pathname,
-      error: request.failure()?.errorText,
-    });
+    failedRequests.push(request);
   });
   await page.waitForSelector(".project-card", { timeout: 60000 });
   await page.evaluate(() => document.fonts.ready.then(() => true));
@@ -164,10 +167,14 @@ try {
       "/startup.js",
       "/app.js",
       "/editor-session.js",
+      "/design-rules.js",
       "/design-tokens.css",
       "/editor-theme.css",
       "/editor-workspace.js",
       "/editor-bridge.js",
+      "/editor-models.js",
+      "/editor-recovery.js",
+      "/opening-placement.js",
       "/icons/house.svg",
       "/icons/couch.svg",
       "/icons/leaf.svg",
@@ -373,7 +380,270 @@ try {
     results.skipped.push(reason);
     console.log("SKIP " + reason);
   }
+  const projectId = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
+  const readProject = () =>
+    page.evaluate(
+      async (id) => (await fetch(`/api/projects/${id}`)).json(),
+      projectId,
+    );
+  const beforeTrash = await readProject();
+  await page.click("#delete-project");
+  await page.waitForSelector("#delete-dialog[open]");
+  await page.click("#confirm-delete");
+  await page.waitForFunction(
+    () =>
+      !document.querySelector("#home-view").hidden &&
+      !document.querySelector("#delete-dialog").open,
+  );
+  await page.click("#open-trash");
+  const row = `.trash-row[data-project-id="${projectId}"]`;
+  await page.waitForSelector(row);
+  await capture("recycle-bin.png");
+  await page.click(row + " button");
+  const card = `.project-entry[data-project-id="${projectId}"] .project-card`;
+  await page.waitForSelector(card);
+  const afterRestore = await readProject();
+  assert.deepEqual(afterRestore.variants, beforeTrash.variants);
+  assert.deepEqual(
+    afterRestore.designPreferences,
+    beforeTrash.designPreferences,
+  );
+  assert.equal(afterRestore.lifecycle, beforeTrash.lifecycle + 2);
+  await page.click('[data-close="trash-dialog"]');
+  await page.click(card);
+  await waitEditor();
+  pass(
+    "Packaged delete and restore preserve every variant and reopen the project",
+  );
+  localVision = await mockProvider();
+  await page.evaluate(async (url) => {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "api",
+        baseUrl: url,
+        model: "fixture",
+        visionModel: "fixture",
+      }),
+    });
+    if (!response.ok)
+      throw new Error("Cannot configure the isolated fixture provider");
+  }, localVision.url);
+  const imageFile = join(directory, "recovery-plan.png");
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 600;
+    canvas.height = 450;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 600, 450);
+    ctx.lineWidth = 10;
+    ctx.strokeRect(20, 20, 560, 410);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  writeFileSync(imageFile, Buffer.from(png, "base64"));
+  async function uploadRecoveryImage(action = "#generate-button") {
+    await page.click("#home-button");
+    await page.waitForSelector("#new-project", { visible: true });
+    await page.click("#new-project");
+    await (await page.$("#floorplan-file")).uploadFile(imageFile);
+    await page.waitForSelector("#image-preview", { visible: true });
+    await page.select("#scheme-count", "1");
+    await page.click(action);
+    await waitEditor();
+    return (await page.$("#designer")).contentFrame();
+  }
+  const partial = structuredClone(recognition);
+  partial.openings.push({
+    type: "door",
+    wall: 99,
+    width: 900,
+    center: [300, 430],
+  });
+  partial.schemes[0].furniture = [{ key: "counter", at: [200, 54.4] }];
+  localVision.enqueueRecognition(partial, partial);
+  frame = await uploadRecoveryImage();
+  await frame.waitForFunction(
+    () => window.__designer?.app.view === "3d" && window.__designer.S3.ready,
+  );
+  assert.deepEqual(
+    await frame.evaluate(() => {
+      const p = window.__designer.app.plan;
+      return [p.walls.length, p.openings.length, p.pendingOpenings.length];
+    }),
+    [4, 1, 1],
+  );
+  await page.click("#locate-layout-issues");
+  await page.waitForFunction(() =>
+    document
+      .querySelector("#messages .message:last-child")
+      ?.textContent.includes("56 mm"),
+  );
+  assert.equal(
+    await page.$$eval(
+      "#messages .message:last-child li",
+      (rows) => rows.filter((r) => /嵌入.*56\s*mm/.test(r.textContent)).length,
+    ),
+    1,
+  );
+  await page.click("#pending-list button");
+  await page.waitForSelector("#repair-wall", { visible: true });
+  const wall = await frame.evaluate(
+    () => window.__designer.app.plan.walls[2].id,
+  );
+  await page.select("#repair-wall", wall);
+  await page.click('#repair-form [type="submit"]');
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#pending-openings").hidden &&
+      document.querySelector("#editor-loading").hidden,
+  );
+  assert.equal(
+    await frame.evaluate(() => window.__designer.app.plan.openings.at(-1).wall),
+    wall,
+  );
+  pass(
+    "Packaged 3D opens with the 56 mm cabinet clash and an orphan door that can be placed on its selected wall",
+  );
+  localVision.enqueueRecognition({ walls: [] }, { walls: [] });
+  frame = await uploadRecoveryImage();
+  assert.deepEqual(
+    await frame.evaluate(() => {
+      const d = window.__designer.app;
+      return [d.view, d.underlay.visible, d.plan.walls.length];
+    }),
+    ["2d", true, 0],
+  );
+  const imageId = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
+  // Capture the finite event stream of this one retry independently of the renderer.
+  await page.evaluate((id) => {
+    const fetchOriginal = window.fetch;
+    window.fetch = async function (resource, init) {
+      const response = await fetchOriginal.call(this, resource, init);
+      if (
+        resource === "/api/generate" &&
+        JSON.parse(init.body).projectId === id
+      ) {
+        window.fetch = fetchOriginal;
+        window.__retryBody = response.clone().text();
+      }
+      return response;
+    };
+  }, imageId);
+  const retryResponse = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/api/generate") &&
+      JSON.parse(r.request().postData() || "{}").projectId === imageId,
+  );
+  await page.click("#retry-source");
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#trace-source").hidden &&
+      !document.querySelector("#retry-dialog").open,
+  );
+  await waitEditor();
+  frame = await (await page.$("#designer")).contentFrame();
+  assert.deepEqual(
+    await frame.evaluate(() => [
+      window.__HOUSEDIY__.projectId,
+      window.__designer.app.view,
+      window.__designer.app.plan.walls.length,
+    ]),
+    [imageId, "3d", 4],
+  );
+  const terminal = (await page.evaluate(() => window.__retryBody))
+    .split("\n\n")
+    .filter((s) => s.startsWith("data: "))
+    .map((s) => JSON.parse(s.slice(6)))
+    .at(-1);
+  assert.equal(terminal.type, "result");
+  assert.equal(terminal.projectId, imageId);
+  assert.match(
+    await page.$eval("#toast", (e) => e.textContent),
+    /设计方案已生成/,
+  );
+  const persistedWallCount = await page.evaluate(
+    async (id) =>
+      (await (await fetch("/api/projects/" + id)).json()).variants[0].plan.walls
+        .length,
+    imageId,
+  );
+  assert.equal(persistedWallCount, 4);
+  const confirmedResponse = await retryResponse;
+  assert.equal(confirmedResponse.status(), 200);
+  pass(
+    "The packaged app preserves an unrecognized image as a traceable 2D project and regenerates 3D under the same project ID",
+  );
+  const beforeTrace = localVision.requests.length;
+  frame = await uploadRecoveryImage("#manual-import");
+  const canvas = await frame.$("#c2d");
+  const box = await canvas.boundingBox();
+  const originalScale = await frame.evaluate(
+    () => window.__designer.app.underlay.mmPerPx,
+  );
+  await page.click("#calibrate-source");
+  await frame.waitForFunction(() => window.__designer.app.tool === "calibrate");
+  const clickAt = (x, y) =>
+    page.mouse.click(box.x + x * box.width, box.y + y * box.height);
+  await clickAt(0.32, 0.45);
+  await clickAt(0.68, 0.45);
+  await frame.waitForSelector(".modal-box input", { visible: true });
+  await page.keyboard.type("3800");
+  await page.keyboard.press("Enter");
+  await frame.waitForFunction(
+    (prev) => window.__designer.app.underlay.mmPerPx !== prev,
+    {},
+    originalScale,
+  );
+  await page.click("#trace-wall");
+  await frame.waitForFunction(() => window.__designer.app.tool === "wall");
+  await clickAt(0.32, 0.55);
+  await clickAt(0.68, 0.55);
+  await page.keyboard.press("Escape");
+  await frame.waitForFunction(
+    () => window.__designer.app.plan.walls.length === 1,
+  );
+  const traced = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
+  await page.click("#home-button");
+  const tracedCard = `.project-entry[data-project-id="${traced}"] .project-card`;
+  await page.waitForSelector(tracedCard, { visible: true });
+  await page.click(tracedCard);
+  await waitEditor();
+  frame = await (await page.$("#designer")).contentFrame();
+  assert.deepEqual(
+    await frame.evaluate(() => [
+      window.__designer.app.view,
+      window.__designer.S3.ready,
+      window.__designer.app.plan.walls.length,
+    ]),
+    ["3d", true, 1],
+  );
+  assert.equal(localVision.requests.length, beforeTrace);
+  pass(
+    "Two-point calibration and manual tracing in the Windows app produce a saved 3D wall without a model call",
+  );
   assert.deepEqual(results.errors, []);
+  for (const request of failedRequests) {
+    const error = request.failure()?.errorText;
+    // Electron DevTools can report ERR_ABORTED after this finite SSE stream has
+    // delivered its terminal result. Keep that observation in the QA record.
+    if (
+      request === confirmedResponse.request() &&
+      error === "net::ERR_ABORTED"
+    ) {
+      results.completedRetryTransport = {
+        status: confirmedResponse.status(),
+        terminal,
+        persistedWallCount,
+        devTools: error,
+      };
+    } else
+      results.networkErrors.push({
+        path: new URL(request.url()).pathname,
+        error,
+      });
+  }
   assert.deepEqual(results.networkErrors, []);
 } catch (error) {
   results.error = error.message;
@@ -385,6 +655,7 @@ try {
     await browser.disconnect();
   }
   child?.kill();
+  await localVision?.close();
   if (log !== undefined) closeSync(log);
   writeFileSync(
     join(directory, "results.json"),

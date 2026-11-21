@@ -49,23 +49,38 @@ export class EditorSession {
   async flush(description) {
     while (this.active) {
       const state = await this.readState();
+      if (!this.active) return;
       if (state.gesture) throw new Error("请先结束当前拖动");
       if (this.matches(state)) {
         this.status("已保存");
         return state;
       }
       this.status("正在保存…");
+      const nextUnderlay = JSON.stringify(state.underlay);
+      const underlayChanged = nextUnderlay !== this.underlayBaseline;
       const result = await this.write(this.endpoint("save"), {
         revision: this.revision,
+        lifecycle: this.project.lifecycle ?? 0,
         plan: state.plan,
-        underlay: state.underlay,
+        ...(underlayChanged
+          ? {
+              underlay: state.underlay,
+              expectedUnderlayVersion: this.project.underlayVersion ?? 0,
+            }
+          : {}),
         description,
       });
       this.revision = result.revision;
+      if (result.imageImport) this.project.imageImport = result.imageImport;
       this.variant.plan = result.plan;
-      this.project.underlay = result.underlay;
+      // A geometry-only save can coexist with calibration in another variant.
+      // Keep the version of the underlay actually displayed in this editor.
+      if (underlayChanged) {
+        this.project.underlay = result.underlay;
+        this.project.underlayVersion = result.underlayVersion;
+        this.underlayBaseline = nextUnderlay;
+      }
       this.baseline = JSON.stringify(state.plan);
-      this.underlayBaseline = JSON.stringify(state.underlay);
       // Re-read after every write: edits arriving during the save must also persist.
     }
   }

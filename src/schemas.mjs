@@ -21,7 +21,14 @@ export const recognitionSchema = object({
     source: { type: "string", enum: ["dimension", "estimate"] },
     reason: str,
   }),
-  walls: arr(object({ a: point, b: point, thickness: num, bearing: bool })),
+  walls: arr(
+    object({
+      a: point,
+      b: point,
+      thickness: num,
+      bearing: { anyOf: [bool, { type: "null" }] },
+    }),
+  ),
   openings: arr(
     object({
       wall: { type: "integer" },
@@ -30,6 +37,8 @@ export const recognitionSchema = object({
       width: num,
       sill: num,
       head: num,
+      hinge: { anyOf: [{ type: "integer", enum: [0, 1] }, { type: "null" }] },
+      side: { anyOf: [{ type: "integer", enum: [-1, 1] }, { type: "null" }] },
     }),
   ),
   rooms: arr(object({ name: str, at: point, mat: str })),

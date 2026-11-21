@@ -26,6 +26,8 @@
 !/scripts/electron-qa.mjs
 !/scripts/qa-startup.mjs
 !/scripts/qa-regressions.mjs
+!/scripts/qa-first-fixes.mjs
+!/scripts/qa-model-assets.mjs
 !/scripts/audit-ui.mjs
 
 node_modules/

@@ -36,6 +36,7 @@ window.addEventListener("DOMContentLoaded", () => {
   rail.setAttribute("aria-label", "设计工具");
   const nav = new Map();
   const resize = () => window.dispatchEvent(new Event("resize"));
+  let splitPanelOpen = false;
   const syncPanels = () => {
     const leftOpen = !body.classList.contains("hide-left");
     const rightOpen = !body.classList.contains("hide-right");
@@ -46,6 +47,19 @@ window.addEventListener("DOMContentLoaded", () => {
       el.setAttribute("aria-expanded", String(active));
     }
     properties.setAttribute("aria-expanded", String(rightOpen));
+    const needsRoom = stage.dataset.view === "split" && (leftOpen || rightOpen);
+    if (splitPanelOpen !== needsRoom) {
+      splitPanelOpen = needsRoom;
+      parent.postMessage(
+        {
+          source: "housediy-editor",
+          ...window.__HOUSEDIY__,
+          type: "split-panel",
+          open: needsRoom,
+        },
+        location.origin,
+      );
+    }
   };
   const panel = (side, open) => {
     body.classList.toggle(`hide-${side}`, !open);
@@ -118,6 +132,58 @@ window.addEventListener("DOMContentLoaded", () => {
   const views = make("div", "atelier-views");
   views.append($("viewSeg"));
   stage.append(views);
+  const drawingTools = make("div", "atelier-drawing-tools");
+  drawingTools.append($("layerSeg"), $("toolHint"));
+  stage.append(drawingTools);
+  D.fitOverview = (margin = 1.08) => {
+    const pose = D.S3.birdPose();
+    const aspect =
+      $("pane3d").clientWidth / Math.max(1, $("pane3d").clientHeight);
+    pose.r *= margin / Math.min(1, Math.max(0.1, aspect));
+    D.S3.setPose({ ...pose, p: 0.45, t: -0.25 });
+    D.S3.renderNow();
+  };
+  let cameraTimer;
+  const fitSplit = () => {
+    clearTimeout(cameraTimer);
+    if (stage.dataset.view !== "split" || !D.S3.ready || D.S3.fp.active) return;
+    if (D.app.transitioning || D.S3.isAnimating()) {
+      cameraTimer = setTimeout(fitSplit, 120);
+      return;
+    }
+    D.fitOverview(1.18);
+  };
+  const syncView = () => {
+    const view = stage.dataset.view;
+    for (const control of views.querySelectorAll("[data-view]"))
+      control.setAttribute(
+        "aria-pressed",
+        String(control.dataset.view === view),
+      );
+    $("pane3d").inert = view === "2d";
+    $("pane2d").inert = view === "3d";
+    drawingTools.hidden = view === "3d";
+  };
+  new MutationObserver(() => {
+    syncView();
+    syncPanels();
+    fitSplit();
+  }).observe(stage, { attributes: true, attributeFilter: ["data-view"] });
+  syncView();
+  let fitTimer;
+  new ResizeObserver(() => {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => {
+      const pane = $("pane2d");
+      if (
+        stage.dataset.view !== "3d" &&
+        pane.clientWidth > 205 &&
+        pane.clientHeight > 205
+      )
+        D.fit2D(pane.clientWidth - 18, pane.clientHeight - 18);
+      fitSplit();
+    }, 120);
+  }).observe($("pane2d"));
 
   header.id = "atelier-advanced";
   header.classList.add("atelier-advanced");

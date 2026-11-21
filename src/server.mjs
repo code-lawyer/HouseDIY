@@ -1,47 +1,17 @@
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { createStore, Conflict } from "./store.mjs";
 import { chat, testConnection, recognize } from "./ai.mjs";
 import { codexStatus, codexLogin } from "./codex.mjs";
 import { string, number, validatePlan } from "./model.mjs";
+import { requireDesignReview } from "./design-rules.mjs";
+
+import { editorHtml } from "./editor-template.mjs";
+import { createModelLibrary, maxPlanFileBytes } from "./model-assets.mjs";
 
 const base = new URL("../", import.meta.url);
-const template = readFileSync(new URL("vendor/designer.html", base), "utf8");
-const license = readFileSync(
-  new URL("vendor/HOUSE-PLAN-DESIGNER-LICENSE", base),
-  "utf8",
-);
-const encode = (v) => JSON.stringify(v).replaceAll("<", "\\u003c");
-function editorHtml(project, variant) {
-  let html = template
-    .replace(/<script id="__preset">.*?<\/script>/s, "")
-    .replace(
-      'location.search.includes("debug")&&(window.__designer=',
-      "true&&(window.__designer=",
-    )
-    // The desktop store is authoritative; never restore a stale browser cache.
-    .replace("function JL(){", "function JL(){return null;");
-  const preset = {
-    id: `housediy-${project.id}-${variant.id}`,
-    plan: variant.plan,
-    underlay: project.underlay,
-  };
-  const payload = `<script id="__preset">window.__PRESET__=${encode(preset)};window.__HOUSEDIY__=${encode({ projectId: project.id, variantId: variant.id })}</script>`;
-  html = html
-    .replace(/<meta charset[^>]*>/i, (m) => m + payload)
-    .replace(
-      "</head>",
-      '<link rel="stylesheet" href="/design-tokens.css"><link rel="stylesheet" href="/editor-theme.css"></head>',
-    )
-    .replace(
-      "</body>",
-      '<script src="/editor-workspace.js"></script><script src="/editor-bridge.js"></script></body>',
-    );
-  return html + "\n<!--\n" + license + "\n-->";
-}
 export async function startServer({
   dataDir,
   secretCodec,
@@ -49,14 +19,16 @@ export async function startServer({
   seedFile,
 } = {}) {
   const store = createStore(dataDir, secretCodec);
+  const models = createModelLibrary(store.directory);
   store.ensureDemo(seedFile);
   const token = randomBytes(32).toString("hex");
   let origin;
+  const projectRequests = new Map();
   const json = (res, status, data) =>
     res
       .writeHead(status, { "content-type": "application/json;charset=utf-8" })
       .end(JSON.stringify(data));
-  async function body(req) {
+  async function body(req, limit = 16_000_000) {
     if (!/^application\/json(?:;|$)/.test(req.headers["content-type"] ?? "")) {
       const e = new Error("需要 JSON 请求");
       e.status = 415;
@@ -66,8 +38,8 @@ export async function startServer({
       chunks = [];
     for await (const b of req) {
       size += b.length;
-      if (size > 16_000_000)
-        throw new Error("上传内容超过 16 MB，请压缩图片后重试");
+      if (size > limit)
+        throw new Error("上传内容超过 " + limit / 1_000_000 + " MB");
       chunks.push(b);
     }
     try {
@@ -76,8 +48,13 @@ export async function startServer({
       throw new Error("请求内容不是有效 JSON");
     }
   }
-  const stream = async (req, res, work) => {
+  const stream = async (req, res, work, projectId) => {
     const controller = new AbortController();
+    if (projectId) {
+      if (!projectRequests.has(projectId))
+        projectRequests.set(projectId, new Set());
+      projectRequests.get(projectId).add(controller);
+    }
     res.on("close", () => controller.abort());
     res.writeHead(200, {
       "content-type": "text/event-stream;charset=utf-8",
@@ -102,6 +79,11 @@ export async function startServer({
         status: error.status || 400,
       });
     } finally {
+      if (projectId) {
+        projectRequests.get(projectId)?.delete(controller);
+        if (!projectRequests.get(projectId)?.size)
+          projectRequests.delete(projectId);
+      }
       clearInterval(heartbeat);
       res.end();
     }
@@ -125,7 +107,12 @@ export async function startServer({
         !["same-origin", "none"].includes(req.headers["sec-fetch-site"]))
     )
       return json(res, 403, { error: "只允许当前桌面应用访问" });
-    const url = new URL(req.url, origin);
+    let url;
+    try {
+      url = new URL(req.url, origin);
+    } catch {
+      return json(res, 400, { error: "请求地址无效" });
+    }
     if (
       req.method === "GET" &&
       url.pathname === "/bootstrap" &&
@@ -147,6 +134,29 @@ export async function startServer({
       return json(res, 401, { error: "请从 HouseDIY 桌面应用打开" });
     try {
       const path = url.pathname;
+      if (req.method === "GET" && path === "/api/models")
+        return json(res, 200, await models.list());
+      const modelPath = path.match(/^\/api\/models\/([a-z0-9_-]{1,80})$/);
+      if (modelPath) {
+        const id = modelPath[1];
+        if (req.method === "GET") return json(res, 200, await models.read(id));
+        if (req.method === "PUT") {
+          const input = await body(req, maxPlanFileBytes);
+          await models.put(id, input, { repair: input?.repair === true });
+          return json(res, 200, { ok: true });
+        }
+        if (req.method === "DELETE") {
+          await models.remove(id);
+          return json(res, 200, { ok: true });
+        }
+      }
+      const exportPath = path.match(
+        /^\/api\/projects\/([a-f0-9]{16})\/variants\/([a-f0-9]{16})\/export$/,
+      );
+      if (req.method === "GET" && exportPath) {
+        const { v } = store.variant(exportPath[1], exportPath[2]);
+        return json(res, 200, await models.forExport(v.plan));
+      }
       if (req.method === "GET" && path === "/api/settings")
         return json(res, 200, store.publicSettings());
       if (req.method === "POST" && path === "/api/settings")
@@ -171,11 +181,34 @@ export async function startServer({
           status: await codexLogin(store.publicSettings(), { signal, emit }),
         }));
       }
-      if (req.method === "GET" && path === "/api/projects")
-        return json(res, 200, store.list());
+      if (
+        req.method === "GET" &&
+        ["/api/projects", "/api/trash"].includes(path)
+      ) {
+        const deleted = path === "/api/trash";
+        const withDiagnostics = url.searchParams.get("diagnostics") === "1";
+        const catalog = store.catalog(deleted, withDiagnostics && !deleted);
+        return json(res, 200, withDiagnostics ? catalog : catalog.projects);
+      }
+      const projectAction = path.match(
+        /^\/api\/projects\/([a-f0-9]{16})\/(trash|restore|preferences)$/,
+      );
+      if (req.method === "POST" && projectAction) {
+        const [, pid, action] = projectAction,
+          b = await body(req);
+        if (action === "restore")
+          return json(res, 200, store.restore(pid, b.lifecycle));
+        if (action === "preferences")
+          return json(res, 200, store.setDesignPreferences(pid, b));
+        const result = store.trash(pid, b.lifecycle);
+        for (const controller of projectRequests.get(pid) ?? [])
+          controller.abort();
+        return json(res, 200, result);
+      }
       if (req.method === "POST" && path === "/api/import") {
-        const b = await body(req),
+        const b = await body(req, maxPlanFileBytes + 4096),
           plan = validatePlan(b.plan?.plan ?? b.plan);
+        await models.importFor(plan, b.plan?.models);
         return json(
           res,
           200,
@@ -190,46 +223,125 @@ export async function startServer({
       }
       if (req.method === "POST" && path === "/api/generate") {
         const b = await body(req);
-        const image = b.image;
-        if (
-          !image ||
-          !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
-            image.dataUrl ?? "",
+        let source;
+        if (b.projectId) {
+          source = store.assertLifecycle(b.projectId, b.lifecycle);
+          if (!source.imageImport)
+            throw new Conflict("这个项目已完成识别，请打开当前方案。");
+          if (b.copySource === true)
+            source = store.createImageDraft(
+              source.image,
+              source.imageImport.options,
+            );
+          else if (
+            source.imageImport.edited ||
+            source.variants.length !== 1 ||
+            source.variants[0].messages.length
           )
-        )
-          throw new Error("请上传 PNG、JPG 或 WebP 户型图");
-        number(image.width, "图片宽度", 64, 2400);
-        number(image.height, "图片高度", 64, 2400);
-        const options = {
-          name: b.name,
-          brief: typeof b.brief === "string" ? b.brief.slice(0, 4000) : "",
-          height: number(b.height ?? 2800, "层高", 1800, 12000),
-          schemeCount: number(b.schemeCount ?? 3, "方案数量", 1, 3),
-          widthMeters: b.widthMeters
-            ? number(b.widthMeters, "户型跨度", 1, 100)
-            : undefined,
-        };
-        return stream(req, res, async (signal, emit) => {
-          const result = await recognize({
-            settings: await store.credentials(),
-            image,
+            throw new Conflict("当前底图中已有编辑，请用原图另建识别项目。");
+        } else {
+          const image = b.image;
+          if (
+            !image ||
+            !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
+              image.dataUrl ?? "",
+            )
+          )
+            throw new Error("请上传 PNG、JPG 或 WebP 户型图");
+          number(image.width, "图片宽度", 1, 2400);
+          number(image.height, "图片高度", 1, 2400);
+          const schemeCount = number(b.schemeCount ?? 3, "方案数量", 1, 3);
+          if (!Number.isInteger(schemeCount))
+            throw new Error("方案数量必须为 1–3 的整数");
+          const options = {
+            name: typeof b.name === "string" ? b.name.trim().slice(0, 180) : "",
+            brief: typeof b.brief === "string" ? b.brief.slice(0, 4000) : "",
+            height: number(b.height ?? 2800, "层高", 1800, 12000),
+            schemeCount,
+            widthMeters:
+              b.widthMeters == null
+                ? undefined
+                : number(b.widthMeters, "户型跨度", 1, 100),
+          };
+          source = store.createImageDraft(
+            {
+              dataUrl: image.dataUrl,
+              width: image.width,
+              height: image.height,
+            },
             options,
-            signal,
-            emit,
-          });
-          if (signal.aborted) throw new Error("已停止");
-          const p = store.create({ ...result, image });
-          return { projectId: p.id };
-        });
+          );
+        }
+        const projectId = source.id;
+        return stream(
+          req,
+          res,
+          async (signal, emit) => {
+            emit({ type: "source", projectId, text: "原图草稿已保存" });
+            if (b.manualOnly === true)
+              return { projectId, draftStatus: "underlay" };
+            let recognized, savedVariants, savedStatus, checkpointError;
+            try {
+              recognized = await recognize({
+                settings: await store.credentials(),
+                image: source.image,
+                options: source.imageImport.options,
+                signal,
+                emit,
+                onDraft: (draft, status) => {
+                  signal.throwIfAborted();
+                  try {
+                    source = store.finishImageDraft(source, draft);
+                  } catch (error) {
+                    checkpointError = error;
+                    throw error;
+                  }
+                  savedVariants = draft.variants;
+                  savedStatus = status;
+                },
+              });
+            } catch (error) {
+              signal.throwIfAborted();
+              if (error === checkpointError || error instanceof Conflict)
+                throw error;
+              if (savedVariants) return { projectId, draftStatus: savedStatus };
+              store.finishImageDraft(
+                source,
+                null,
+                String(error.message).slice(0, 600),
+              );
+              return { projectId, draftStatus: "underlay" };
+            }
+            signal.throwIfAborted();
+            if (recognized.variants !== savedVariants)
+              store.finishImageDraft(source, recognized);
+            return { projectId, draftStatus: recognized.draftStatus };
+          },
+          projectId,
+        );
       }
       let m = path.match(/^\/api\/projects\/([a-f0-9]{16})$/);
       if (req.method === "GET" && m) return json(res, 200, store.get(m[1]));
       m = path.match(
-        /^\/api\/projects\/([a-f0-9]{16})\/variants\/([a-f0-9]{16})\/(save|chat|copy|note)$/,
+        /^\/api\/projects\/([a-f0-9]{16})\/variants\/([a-f0-9]{16})\/(save|chat|copy|note|review)$/,
       );
       if (req.method === "POST" && m) {
         const [, pid, vid, action] = m,
           b = await body(req);
+        const project = store.assertLifecycle(pid, b.lifecycle);
+        if (action === "review") {
+          const { v } = store.variant(pid, vid);
+          if (v.revision !== b.revision) throw new Conflict();
+          return json(
+            res,
+            200,
+            requireDesignReview(
+              v.plan,
+              validatePlan(b.plan),
+              project.designPreferences,
+            ),
+          );
+        }
         if (action === "save")
           return json(
             res,
@@ -243,6 +355,7 @@ export async function startServer({
                 ? b.description.slice(0, 200)
                 : "手动编辑",
               b.underlay,
+              b.expectedUnderlayVersion,
             ),
           );
         if (action === "copy")
@@ -265,25 +378,38 @@ export async function startServer({
         store.addMessages(pid, vid, [
           { role: "user", content: message, at: Date.now() },
         ]);
-        return stream(req, res, async (signal, emit) => {
-          const result = await chat({
-            settings: await store.credentials(),
-            plan: v.plan,
-            selection: b.selection,
-            checks: b.checks,
-            messages: oldMessages,
-            message,
-            signal,
-            emit,
-          });
-          if (signal.aborted) throw new Error("已停止");
-          if (store.variant(pid, vid).v.revision !== b.revision)
-            throw new Conflict();
-          store.addMessages(pid, vid, [
-            { role: "assistant", content: result.reply, at: Date.now() },
-          ]);
-          return { ...result, baseRevision: b.revision };
-        });
+        return stream(
+          req,
+          res,
+          async (signal, emit) => {
+            const result = await chat({
+              settings: await store.credentials(),
+              plan: v.plan,
+              selection: b.selection,
+              checks: b.checks,
+              preferences: project.designPreferences,
+              assumptions: project.assumptions,
+              messages: oldMessages,
+              message,
+              signal,
+              emit,
+            });
+            if (signal.aborted) throw new Error("已停止");
+            const latest = store.assertLifecycle(pid, project.lifecycle);
+            if (
+              JSON.stringify(latest.designPreferences) !==
+              JSON.stringify(project.designPreferences)
+            )
+              throw new Conflict("设计范围已变化，请按新的范围重新提出需求");
+            if (store.variant(pid, vid).v.revision !== b.revision)
+              throw new Conflict();
+            store.addMessages(pid, vid, [
+              { role: "assistant", content: result.reply, at: Date.now() },
+            ]);
+            return { ...result, baseRevision: b.revision };
+          },
+          pid,
+        );
       }
       m = path.match(/^\/editor\/([a-f0-9]{16})\/([a-f0-9]{16})$/);
       if (req.method === "GET" && m) {
@@ -297,11 +423,15 @@ export async function startServer({
         "/app.js": "app.js",
         "/startup.js": "startup.js",
         "/editor-session.js": "editor-session.js",
+        "/design-rules.js": "../src/design-rules.mjs",
+        "/opening-placement.js": "../src/opening-placement.mjs",
+        "/editor-recovery.js": "editor-recovery.js",
         "/style.css": "style.css",
         "/design-tokens.css": "design-tokens.css",
         "/editor-theme.css": "editor-theme.css",
         "/editor-workspace.js": "editor-workspace.js",
         "/editor-bridge.js": "editor-bridge.js",
+        "/editor-models.js": "editor-models.js",
         "/logo.svg": "logo.svg",
         "/fonts/noto-sans-sc.ttf": "fonts/noto-sans-sc.ttf",
       };
@@ -311,7 +441,7 @@ export async function startServer({
         const name = staticFiles[path],
           type = name.endsWith(".css")
             ? "text/css"
-            : name.endsWith(".js")
+            : /\.m?js$/.test(name)
               ? "text/javascript"
               : name.endsWith(".ttf")
                 ? "font/ttf"

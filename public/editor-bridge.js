@@ -1,5 +1,11 @@
 window.addEventListener("DOMContentLoaded", async () => {
   if (parent === window) return;
+  const {
+    requireDesignReview,
+    designFindings,
+    mergeDesignFindings,
+    wallStructure,
+  } = await import("/design-rules.js");
   const D = window.__designer,
     meta = window.__HOUSEDIY__,
     post = (data) =>
@@ -12,6 +18,38 @@ window.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   try {
+    const { openingRecovery } = await import("/editor-recovery.js");
+    const recovery = openingRecovery(D, post);
+    const structureLabel = (wall) =>
+      ({ bearing: "承重墙", unknown: "承重待核实", partition: "非承重墙" })[
+        wallStructure(wall)
+      ];
+    window.__wallStructureLabel = structureLabel;
+    window.__wallStructure = wallStructure;
+    const inspector = document.getElementById("inspector");
+    new MutationObserver(() => {
+      const checkbox = inspector.querySelector("#wBear");
+      if (!checkbox || D.app.sel.kind !== "wall") return;
+      const wall = D.app.plan.walls.find((w) => w.id === D.app.sel.id);
+      if (!wall) return;
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", "结构图标注的承重属性");
+      for (const [value, label] of [
+        ["unknown", "承重待核实"],
+        ["bearing", "承重墙"],
+        ["partition", "已核实非承重墙"],
+      ])
+        select.add(new Option(label, value));
+      select.value = wallStructure(wall);
+      select.onchange = () => {
+        wall.bearing =
+          select.value === "unknown" ? null : select.value === "bearing";
+        wall.bearingFrom = select.value === "unknown" ? "inferred" : "drawing";
+        D.commit();
+      };
+      checkbox.parentElement.replaceChildren("结构图标注", select);
+    }).observe(inspector, { childList: true, subtree: true });
+    await window.__houseModelsReady;
     // Upstream initializes its undo baseline from the supplied preset plan.
     // Replacing again here would create a spurious first undo step.
     const singleFloorControls = () => {
@@ -72,15 +110,45 @@ window.addEventListener("DOMContentLoaded", async () => {
       selection: structuredClone(D.app.sel),
       gesture,
     });
-    const checks = () =>
-      D.runChecks()
-        .issues.map(({ level, type, msg, targets }) => ({
-          level,
-          type,
-          msg,
-          targets,
-        }))
-        .slice(0, 60);
+    const checks = (preferences = window.__PRESET__.designPreferences) => {
+      const { plan } = D.app;
+      const kinds = new Map();
+      for (const [key, kind] of [
+        ["furniture", "furn"],
+        ["rooms", "room"],
+        ["walls", "wall"],
+        ["openings", "opening"],
+        ["elec", "elec"],
+        ["structs", "struct"],
+      ])
+        for (const item of plan[key]) kinds.set(item.id, kind);
+      const report = (run, name) => {
+        try {
+          return run();
+        } catch {
+          return [
+            {
+              level: "warn",
+              type: "检查",
+              msg: name + "未完成，可稍后重新检查。",
+              targets: [],
+            },
+          ];
+        }
+      };
+      return mergeDesignFindings(
+        report(() => designFindings(plan, preferences), "布局检查"),
+        report(() => D.runChecks().issues, "编辑器检查"),
+      ).map(({ level, type, msg, targets, rule }) => ({
+        level,
+        type,
+        msg,
+        rule,
+        targets: (targets ?? [])
+          .map((t) => ({ id: t.id, kind: kinds.get(t.id) }))
+          .filter((t) => t.kind),
+      }));
+    };
     window.addEventListener("message", async (event) => {
       if (
         event.source !== parent ||
@@ -99,22 +167,47 @@ window.addEventListener("DOMContentLoaded", async () => {
             JSON.stringify(D.app.plan) !== payload.expected
           )
             throw new Error("画面中的方案已被手动修改，请重新提出需求");
+          requireDesignReview(D.app.plan, payload.plan, payload.preferences);
           D.replacePlan(structuredClone(payload.plan));
           D.requestDraw();
           if (D.S3.ready) D.S3.renderNow();
-          result = { ...state(), issues: checks() };
+          result = { ...state(), issues: checks(payload.preferences) };
         } else if (action === "undo") {
           if (gesture) throw new Error("请先结束当前拖动");
           const changed = D.undo();
           D.requestDraw();
           if (D.S3.ready) D.S3.renderNow();
           result = { changed, ...state() };
-        } else if (action === "checks") result = { issues: checks() };
+        } else if (action === "checks")
+          result = { issues: checks(payload?.preferences) };
         else if (action === "view") {
           await settleView();
           await D.setView(payload);
           await settleView();
           result = { ok: true };
+        } else if (action === "sourceTool" || action === "prepareOpening") {
+          await settleView();
+          await D.setView("2d");
+          await settleView();
+          if (D.app.underlay && !D.app.underlay.visible) {
+            D.app.underlay.visible = true;
+            D.emit("underlay");
+          }
+          const tool = action === "prepareOpening" ? "select" : payload;
+          if (!["select", "wall", "calibrate"].includes(tool))
+            throw new Error("底图工具无效");
+          D.setTool(tool);
+          D.requestDraw();
+          recovery.update();
+          if (action === "sourceTool") document.getElementById("c2d").focus();
+          result =
+            action === "prepareOpening"
+              ? recovery.choices(payload.id)
+              : { ok: true };
+        } else if (action === "attachOpening") {
+          if (gesture) throw new Error("请先结束当前拖动");
+          recovery.attach(payload);
+          result = state();
         } else if (action === "select") {
           D.select(payload.kind, payload.id);
           result = state();
@@ -136,6 +229,14 @@ window.addEventListener("DOMContentLoaded", async () => {
             if (D.S3.ready) D.S3.renderNow();
           }
           result = { changed };
+        } else if (action === "restoreModel") {
+          const { id, file } = payload;
+          if (!window.houseModels.missing.has(id) || !(file instanceof File))
+            throw new Error("请选择此模型的原始 GLB 文件");
+          if (file.size > 64_000_000)
+            throw new Error("单个 GLB 模型上限为 64 MB");
+          await D.importModel(file, id);
+          result = { ok: true };
         } else if (action === "underlay") {
           if (D.app.underlay) {
             D.app.underlay.visible = !D.app.underlay.visible;
@@ -155,6 +256,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       }),
       lastSelection = "";
     setInterval(() => {
+      recovery.update();
       if (gesture) return;
       const plan = JSON.stringify({
           plan: D.app.plan,
@@ -191,7 +293,9 @@ window.addEventListener("DOMContentLoaded", async () => {
           label:
             item?.name ||
             (selection.kind === "wall"
-              ? "墙体"
+              ? item
+                ? structureLabel(item)
+                : "墙体"
               : selection.kind === "opening"
                 ? "门窗"
                 : ""),
@@ -199,17 +303,50 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
     }, 350);
     D.fit2D();
-    await D.setView("3d");
-    // setView schedules its camera transition after returning. Apply our bird's-eye
-    // pose only after it settles, otherwise that transition overwrites the pose.
-    await settleView();
-    const pose = D.S3.birdPose();
-    const aspect = D.S3.sceneRefs().camera.aspect;
-    // Leave room around the whole model when the property panels narrow the canvas.
-    pose.r *= 1.08 / Math.min(1, aspect);
-    D.S3.setPose({ ...pose, p: 0.45, t: -0.25 });
-    D.S3.renderNow();
-    post({ type: "ready", ...state() });
+    let viewWarning;
+    if (
+      D.app.plan.walls.length ||
+      !D.app.underlay ||
+      D.app.plan.furniture.length
+    ) {
+      try {
+        await D.setView("3d");
+        await settleView();
+        D.fitOverview();
+      } catch {
+        D.app.transitioning = false;
+        try {
+          await D.setView("2d");
+        } catch {
+          D.app.view = "2d";
+          D.app.transitioning = false;
+          document.getElementById("stage").dataset.view = "2d";
+          for (const b of document.querySelectorAll("#viewSeg [data-view]"))
+            b.classList.toggle("on", b.dataset.view === "2d");
+        }
+        D.fit2D();
+        D.requestDraw();
+        viewWarning = "3D 视图未能打开，已保留二维编辑。可再次点击「3D」重试。";
+      }
+    } else {
+      await D.setView("2d");
+      D.fit2D();
+    }
+    const missingModels = [...window.houseModels.missing].map((id) => ({
+      id,
+      name:
+        D.app.plan.furniture.find(
+          (f) => f.modelId === id || f.key === "model:" + id,
+        )?.name || id,
+    }));
+    post({
+      type: "ready",
+      ...state(),
+      missingModels,
+      viewWarning,
+      modelWarnings: window.houseModels.warnings,
+    });
+    recovery.update();
     post({ type: "three-ready", issues: checks() });
   } catch (error) {
     post({ type: "error", message: error.message });

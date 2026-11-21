@@ -28,6 +28,11 @@ test("rebranding opens the existing workspace without copying or overwriting dat
     resolve(".qa/isolated"),
   );
   mkdirSync(join(defaultDir, "workspace", "projects"), { recursive: true });
+  assert.equal(resolveUserDataDir(options), legacyDir);
+  writeFileSync(
+    join(defaultDir, "workspace", "workspace-initialized.json"),
+    '{"initialized":true}',
+  );
   assert.equal(resolveUserDataDir(options), defaultDir);
   assert.equal(readFileSync(project, "utf8"), '{"preserved":true}');
 });

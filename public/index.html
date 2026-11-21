@@ -33,6 +33,7 @@
         <span class="divider"></span><span id="project-name"></span
         ><select id="variant-select" aria-label="切换设计方案"></select
         ><button id="copy-variant" class="quiet">另存方案</button
+        ><button id="delete-project" class="quiet">删除项目</button
         ><button id="save-status" class="save-status" title="保存当前修改">
           已保存
         </button>
@@ -63,7 +64,6 @@
     </header>
     <main id="home-view">
       <div class="home-intro">
-        <p class="eyebrow">你的空间，你来决定</p>
         <h1>从户型图，走进你的家。</h1>
         <p>生成可编辑的 3D 方案，在对话与手动调整中，把想法慢慢落到实处。</p>
       </div>
@@ -90,8 +90,7 @@
           </div>
         </button>
         <div class="continue-card">
-          <span class="small-label">已有设计？</span>
-          <h2>接着上一次的想法。</h2>
+          <h2>导入已有方案</h2>
           <p>导入原设计器导出的方案 JSON，继续使用熟悉的编辑方式。</p>
           <button id="import-plan" class="secondary">导入方案文件</button
           ><small
@@ -101,11 +100,19 @@
       </div>
       <div class="section-row">
         <h2>最近的项目</h2>
-        <span id="project-count"></span>
+        <div class="project-list-actions">
+          <span id="project-count"></span
+          ><button id="open-trash" class="quiet">回收站</button>
+        </div>
       </div>
+      <details
+        id="project-diagnostics"
+        class="file-diagnostics"
+        hidden
+      ></details>
       <div id="project-list" class="project-grid"></div>
       <footer>
-        HouseDIY 0.1.5 · 设计器基于 house-plan-designer · 本地工作空间
+        HouseDIY 0.1.7-rc.2 · 设计器基于 house-plan-designer · 本地工作空间
       </footer>
     </main>
     <main id="editor-view" hidden>
@@ -163,15 +170,117 @@
           aria-label="设计对话与待确认修改"
           tabindex="0"
         >
+          <div
+            id="model-feedback"
+            class="file-diagnostics"
+            role="status"
+            hidden
+          ></div>
           <details id="assumptions">
             <summary>识图与尺寸待确认</summary>
             <ul id="assumption-list"></ul>
           </details>
+          <section
+            id="image-recovery"
+            class="file-diagnostics"
+            aria-label="户型图修正"
+            hidden
+          >
+            <div id="trace-source" hidden>
+              <strong>原图草稿已保存</strong>
+              <p id="source-reason"></p>
+              <div id="drawing-actions" class="recovery-actions">
+                <button id="calibrate-source" class="quiet" type="button">
+                  校准尺寸
+                </button>
+                <button id="trace-wall" class="quiet" type="button">
+                  在底图描墙
+                </button>
+              </div>
+              <button id="retry-source" class="quiet" type="button">
+                重新识别原图
+              </button>
+            </div>
+            <div id="pending-openings" hidden>
+              <strong id="pending-count"></strong>
+              <div id="pending-list" class="recovery-actions"></div>
+              <form id="repair-form" hidden>
+                <strong id="repair-title"></strong>
+                <p id="repair-reason"></p>
+                <label>所属墙<select id="repair-wall" required></select></label>
+                <label>门窗类型<select id="repair-type"></select></label>
+                <div class="repair-fields">
+                  <label
+                    >距墙起点（mm）<input
+                      id="repair-pos"
+                      type="number"
+                      step="any"
+                      min="0"
+                      required
+                  /></label>
+                  <label
+                    >宽度（mm）<input
+                      id="repair-width"
+                      type="number"
+                      step="any"
+                      min="100"
+                      max="20000"
+                      required
+                  /></label>
+                  <label
+                    >底部离地（mm）<input
+                      id="repair-sill"
+                      type="number"
+                      step="any"
+                      min="0"
+                      required
+                  /></label>
+                  <label
+                    >顶部离地（mm）<input
+                      id="repair-head"
+                      type="number"
+                      step="any"
+                      min="100"
+                      required
+                  /></label>
+                </div>
+                <p id="repair-error" role="status"></p>
+                <div class="recovery-actions">
+                  <button type="submit" class="secondary">确认放置门窗</button>
+                  <button id="cancel-repair" type="button" class="quiet">
+                    收起
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+          <details id="design-scope" class="design-scope">
+            <summary>AI 设计范围</summary>
+            <label
+              ><input
+                id="layout-locked"
+                type="checkbox"
+                checked
+              />固定户型（保留墙体和门窗）</label
+            >
+            <label
+              ><input
+                id="freestanding-storage"
+                type="checkbox"
+              />允许独立高柜（隔断等用途）</label
+            >
+            <p class="hint">设置随项目保存。家具和材质可继续调整。</p>
+          </details>
           <div id="layout-feedback" hidden>
-            <span id="layout-feedback-text"></span
-            ><button id="fix-layout" type="button" class="quiet">
-              请 AI 调整 →
-            </button>
+            <span id="layout-feedback-text"></span>
+            <div id="layout-feedback-actions">
+              <button id="locate-layout-issues" type="button" class="quiet">
+                查看并定位
+              </button>
+              <button id="fix-layout" type="button" class="quiet">
+                请 AI 调整 →
+              </button>
+            </div>
           </div>
           <div id="messages" class="messages" aria-live="polite"></div>
           <section
@@ -256,6 +365,25 @@
         </form>
       </aside>
     </main>
+    <dialog id="delete-dialog" aria-labelledby="delete-title">
+      <h2 id="delete-title">删除项目</h2>
+      <p id="delete-description"></p>
+      <p class="hint">项目及其方案、对话和历史会移入本地回收站，可以恢复。</p>
+      <p id="delete-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="cancel-delete" class="secondary">取消</button
+        ><button id="confirm-delete" class="primary">移入回收站</button>
+      </div>
+    </dialog>
+    <dialog id="trash-dialog" aria-labelledby="trash-title">
+      <div class="dialog-heading">
+        <h2 id="trash-title">回收站</h2>
+        <button class="quiet" data-close="trash-dialog">关闭</button>
+      </div>
+      <p class="hint">恢复后会保留原有方案、对话和历史。</p>
+      <details id="trash-diagnostics" class="file-diagnostics" hidden></details>
+      <div id="trash-list"></div>
+    </dialog>
     <dialog id="settings-dialog" aria-labelledby="settings-title">
       <form id="settings-form">
         <div class="dialog-heading">
@@ -410,7 +538,7 @@
         >
         <div class="field-row">
           <label
-            >左右总跨度（米，选填）<input
+            >最左、最右外墙中线的水平跨度（米，选填）<input
               id="known-width"
               type="number"
               min="1"
@@ -442,18 +570,29 @@
           </select></label
         >
         <p class="hint">
-          AI
-          会识别图片并生成可编辑初稿。缺失尺寸和推断的承重信息会列入待确认项。
+          原图会先保存。AI 可根据识别出的墙线生成 3D
+          草稿，也可直接在底图上描墙。
         </p>
         <div id="import-result" class="form-result" role="status"></div>
         <div class="dialog-actions">
           <button id="cancel-generate" type="button" class="secondary" hidden>
-            停止生成</button
+            停止识别，打开草稿</button
           ><button id="generate-button" type="submit" class="primary">
-            生成 3D 与设计方案 →
+            生成 3D 与设计方案 →</button
+          ><button id="manual-import" type="submit" class="secondary">
+            直接在原图描墙
           </button>
         </div>
       </form>
+    </dialog>
+    <dialog id="retry-dialog" aria-labelledby="retry-heading">
+      <h2 id="retry-heading">重新识别原图</h2>
+      <p id="retry-progress" role="status">正在读取已保存的底图…</p>
+      <div class="dialog-actions">
+        <button id="stop-retry" type="button" class="secondary">
+          停止识别，返回草稿
+        </button>
+      </div>
     </dialog>
     <input id="plan-file" type="file" accept=".json,application/json" hidden />
     <div id="toast" role="status" hidden></div>

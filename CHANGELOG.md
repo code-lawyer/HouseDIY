@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.7-rc.2 — 2026-11-21 (Windows prerelease)
+
+- Save the imported reference image before recognition. The same project opens for tracing or another recognition attempt when the provider stops or returns no usable walls.
+- Build valid walls, openings and furniture independently. Mark unresolved openings on the drawing so the user can choose a wall, check the dimensions and place or undo the opening.
+- Keep editable 3D drafts with design conflicts. Merge matching findings in the editor and apply explicitly registered blocking rules to new or worsened AI edits.
+
+## 0.1.7-rc.1 — 2026-11-18 (local Windows release candidate)
+
+- Calibrate floor-plan images to the supplied span between the outer wall centerlines. Require the requested number of physically distinct layouts and explain scale disagreements.
+- Protect structural walls of unknown status, their openings and shared endpoints. Screen low furniture in door paths and narrow passages, and reduce repeated geometry work on large plans.
+- Keep custom GLB assets across restarts. Include referenced assets in single-plan JSON, and support restoring missing or damaged originals. Isolate invalid projects with a file-specific diagnostic while the rest of the library stays usable.
+- Export standalone share files with the current calibrated underlay and referenced models. Chrome and Edge can open and navigate these files offline.
+- Load home previews in a single request. Keep the project name visible on common laptop screens and give the drawing, panels and tools dedicated space in 2D and split views.
+- Verify two real Codex tasks on synthetic or public inputs, the Windows portable build, browser interactions, model recovery and drawing exports. See the [release assessment](docs/releases/0.1.7-rc.1-local.md) for scope and outstanding stable-release checks.
+
+## 0.1.6 — 2026-11-17 (local build)
+
+- Review AI edits on a candidate plan before applying or saving: screen oversized ordinary doors, inaccessible or unexplained enclosed rooms, blocked door approaches, misplaced tall storage, collisions and implausibly small appliances. Both model adapters receive correction feedback.
+- Persist an explicit project layout lock and an opt-in for freestanding tall storage. Preserve site notes, services, structural objects and furniture configuration in AI context; retain recognized door handing and flag unknown handing.
+- Add project deletion to a local recycle bin and restoration of all variants, conversations, history and embedded source data. Cancel active project requests and reject stale writes after deletion or restoration. Clearing the project library no longer recreates the demo on restart.
+- Add deterministic rule tests, provider correction tests, lifecycle race coverage and an isolated browser acceptance suite (`npm run test:first-fixes`).
+
+Rules are conservative product checks, not construction-code certification. Room analysis uses a bounded raster, original missing-site information remains unresolved, and the upstream editor's broader checks remain available. No public release has been published by this change.
+
 ## 0.1.5 — 2026-11-16
 
 Warm atelier interface and review fixes for the Windows x64 portable build.

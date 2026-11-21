@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { recognition } from "./mock-provider.mjs";
 import {
   demoPlan,
   applyOperations,
@@ -8,6 +9,8 @@ import {
   revision,
   normalizeWalls,
 } from "../src/model.mjs";
+import { recognize } from "../src/ai.mjs";
+import { wallStructure } from "../src/design-rules.mjs";
 
 test("furniture edits preserve original plan, IDs and unrelated geometry", () => {
   const p = demoPlan(),
@@ -105,6 +108,288 @@ test("recognition rejects missing geometry and unknown furniture", () => {
     /家具库/,
   );
 });
+
+test("recognition isolates malformed walls, room labels and furniture while retaining original wall indices", () => {
+  const data = structuredClone(recognition);
+  data.walls.unshift({ a: [5, 5], b: null });
+  data.openings[0].wall = 1;
+  data.rooms.push(null);
+  data.schemes[0].furniture.unshift({ key: "unknown-product", at: [200, 150] });
+  const result = fromRecognition(
+    data,
+    { width: 600, height: 450 },
+    { schemeCount: 1, widthMeters: 5.6 },
+  );
+  const plan = result.variants[0].plan;
+  assert.equal(plan.walls.length, 4);
+  assert.equal(plan.openings[0].wall, plan.walls[0].id);
+  assert.equal(plan.rooms.length, 1);
+  assert.deepEqual(
+    plan.furniture.map((f) => f.key),
+    ["sofa"],
+  );
+  assert.ok(result.geometryIssues.length >= 2);
+  assert.match(result.schemeIssues.join(" "), /1 件家具待补/);
+  assert.equal(result.underlay.mmPerPx, 10);
+});
+test("an opening crossing a T junction is repairable and a single wall can form a partial 3D model", () => {
+  const data = structuredClone(recognition);
+  data.walls.push({ a: [300, 20], b: [300, 200] });
+  const image = { width: 600, height: 450 };
+  const { plan } = fromRecognition(data, image).variants[0];
+  assert.equal(plan.walls.length, 6);
+  assert.equal(plan.openings.length, 0);
+  assert.deepEqual(plan.pendingOpenings[0].pixel, [300, 20]);
+  assert.match(plan.pendingOpenings[0].reason, /所属墙段/);
+  data.walls = data.walls.slice(0, 1);
+  delete data.scale;
+  const partial = fromRecognition(data, image);
+  assert.equal(partial.variants[0].plan.walls.length, 1);
+  assert.ok(partial.underlay.mmPerPx > 0);
+});
+test("known wall lines survive uncertain thickness and alternate numeric notation", () => {
+  const data = structuredClone(recognition);
+  data.scale.mmPerPixel = "10";
+  for (const w of data.walls) {
+    w.a = { x: String(w.a[0]), y: String(w.a[1]) };
+    w.thickness = "未标明";
+  }
+  data.openings[0].wall = "0";
+  data.openings[0].width = "1800";
+  data.schemes[0].furniture[0].w = "2200";
+  const result = fromRecognition(
+    data,
+    { width: 600, height: 450 },
+    { schemeCount: 1 },
+  );
+  const p = result.variants[0].plan;
+  assert.equal(p.walls.length, 4);
+  assert.ok(p.walls.every((w) => w.t === 120));
+  assert.match(result.assumptions.join(" "), /厚度待核对/);
+  assert.equal(p.openings[0].width, 1800);
+  assert.equal(p.furniture[0].w, 2200);
+});
+test("a retry cannot erase an unresolved door just by omitting it", async () => {
+  const first = structuredClone(recognition);
+  first.openings.push({
+    wall: 9,
+    type: "door",
+    width: 900,
+    center: [300, 430],
+  });
+  const responses = [first, recognition];
+  const result = await recognize({
+    image: { width: 600, height: 450 },
+    options: { schemeCount: 1 },
+    settings: { provider: "codex" },
+    completeCodex: async () => responses.shift(),
+  });
+  assert.equal(result.variants[0].plan.pendingOpenings.length, 1);
+});
+
+test("user span calibrates the wall extents and underlay at each requested scheme count", () => {
+  const image = { width: 600, height: 450 };
+  for (const [widthMeters, schemeCount] of [
+    [10, 1],
+    [8, 2],
+    [100, 3],
+  ]) {
+    const result = fromRecognition(recognition, image, {
+      widthMeters,
+      schemeCount,
+    });
+    assert.equal(result.variants.length, schemeCount);
+    const underlay = result.underlay;
+    assert.equal(underlay.mmPerPx, (widthMeters * 1000) / 560);
+    assert.match(result.assumptions[0], /5\.6 米.*有差异/);
+    for (const { plan } of result.variants) {
+      const xs = plan.nodes.map((n) => n.x);
+      assert.equal(Math.max(...xs) - Math.min(...xs), widthMeters * 1000);
+      const world = ([x, y]) => [
+        Math.round(underlay.x + x * underlay.mmPerPx),
+        Math.round(underlay.y + y * underlay.mmPerPx),
+      ];
+      assert.deepEqual([plan.nodes[0].x, plan.nodes[0].y], world([20, 20]));
+      assert.deepEqual(
+        [plan.furniture[0].x, plan.furniture[0].y],
+        world([420, 220]),
+      );
+      assert.deepEqual(plan.walls, result.variants[0].plan.walls);
+    }
+  }
+  assert.equal(
+    fromRecognition(recognition, image, { schemeCount: 1 }).underlay.mmPerPx,
+    10,
+  );
+});
+
+test("recognition retries incomplete schemes and retains usable results if still incomplete", async () => {
+  for (const problem of ["few", "same"]) {
+    const wrong = structuredClone(recognition);
+    wrong.schemes =
+      problem === "few"
+        ? wrong.schemes.slice(0, 1)
+        : [wrong.schemes[0], { ...wrong.schemes[0], name: "另一名称" }];
+    const prompts = [];
+    const args = {
+      image: { width: 600, height: 450 },
+      settings: { provider: "codex" },
+      options: { schemeCount: 2, height: 2800 },
+      completeCodex: async (_settings, prompt) => {
+        prompts.push(prompt);
+        return prompts.length === 1 ? wrong : recognition;
+      },
+    };
+    const result = await recognize(args);
+    assert.equal(result.variants.length, 2);
+    assert.equal(result.draftStatus, undefined);
+    assert.equal(prompts.length, 2);
+    assert.match(prompts[1], problem === "few" ? /只返回 1 套/ : /完全相同/);
+    const draft = await recognize({
+      ...args,
+      completeCodex: async () => wrong,
+    });
+    assert.equal(draft.draftStatus, "partial");
+    assert.deepEqual(
+      draft.variants.map((v) => v.name),
+      ["浅木"],
+    );
+    assert.match(draft.assumptions[0], /保留 1 套可编辑方案/);
+  }
+});
+
+test("recognition preserves the walls and original image if all furniture layouts are unusable", async () => {
+  const broken = structuredClone(recognition);
+  broken.schemes = [{ name: "无效家具方案", furniture: [{ key: "sofa" }] }];
+  const image = {
+    width: 600,
+    height: 450,
+    dataUrl: "data:image/png;base64,AA==",
+  };
+  const result = await recognize({
+    image,
+    settings: { provider: "codex" },
+    options: { schemeCount: 1, height: 2800 },
+    completeCodex: async () => broken,
+  });
+  assert.equal(result.draftStatus, "partial");
+  const [variant] = result.variants;
+  assert.equal(variant.name, "户型结构草稿");
+  assert.equal(variant.plan.walls.length, 4);
+  assert.equal(variant.plan.openings.length, 1);
+  assert.deepEqual(variant.plan.furniture, []);
+  assert.equal(result.underlay.src, image.dataUrl);
+  assert.match(result.assumptions[1], /第 1 套方案无法建模/);
+});
+
+test("a failed retry keeps the first usable recognition while a cancelled retry stops", async () => {
+  const incomplete = {
+    ...recognition,
+    schemes: recognition.schemes.slice(0, 1),
+  };
+  const args = {
+    image: { width: 600, height: 450 },
+    settings: { provider: "codex" },
+    options: { schemeCount: 2, height: 2800 },
+  };
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    let requests = 0;
+    const request = recognize({
+      ...args,
+      signal: controller.signal,
+      completeCodex: async () => {
+        if (++requests === 1) return incomplete;
+        if (cancel) controller.abort();
+        throw new Error("模型响应超时");
+      },
+    });
+    if (cancel) await assert.rejects(request, { name: "AbortError" });
+    else {
+      const draft = await request;
+      assert.equal(draft.draftStatus, "partial");
+      assert.equal(draft.variants[0].plan.furniture[0].key, "sofa");
+    }
+    assert.equal(requests, 2);
+  }
+});
+
+test("unknown and inferred walls stay protected across structural operations and shared endpoints", () => {
+  const p = demoPlan();
+  const wall = p.walls.find((w) => w.id === p.openings[0].wall);
+  const opening = p.openings[0];
+  delete wall.bearing;
+  p.nodes.push({ id: "tip", x: 2000, y: 2000 });
+  p.walls.push({
+    id: "partition",
+    a: wall.a,
+    b: "tip",
+    t: 100,
+    bearing: false,
+    status: "existing",
+  });
+  for (const bearing of [undefined, null, false]) {
+    if (bearing !== undefined) wall.bearing = bearing;
+    assert.equal(wallStructure(wall), "unknown");
+    for (const op of [
+      { op: "remove_wall", id: wall.id },
+      { op: "update_wall", id: wall.id, t: 100 },
+      { op: "add_opening", wallId: wall.id, pos: 2500 },
+      { op: "remove_opening", id: opening.id },
+      { op: "update_opening", id: opening.id, width: 900 },
+      { op: "update_wall", id: "partition", a: [300, 300] },
+    ])
+      assert.throws(() => applyOperations(p, [op]), /承重/);
+  }
+  const image = structuredClone(recognition);
+  delete image.walls[0].bearing;
+  assert.equal(
+    wallStructure(
+      fromRecognition(image, { width: 600, height: 450 }).variants[0].plan
+        .walls[0],
+    ),
+    "unknown",
+  );
+  assert.equal(
+    wallStructure({ bearing: false, status: "new", bearingFrom: "inferred" }),
+    "partition",
+  );
+  assert.equal(wallStructure({ bearing: false }), "partition");
+  assert.equal(wallStructure({ bearing: true, status: "new" }), "bearing");
+});
+
+test("renderer fixture kinds and geometry are checked before persistence, with legacy dimension defaults", () => {
+  const p = demoPlan();
+  p.elec = [{ id: "socket1", kind: "socket", x: 250, y: 300, links: [] }];
+  p.structs = [{ id: "s1", kind: "shaft", x: 800, y: 200 }];
+  p.beams = [{ id: "b1", a: { x: 400, y: 400 }, b: { x: 2000, y: 400 } }];
+  p.measures = [{ id: "m1", a: { x: 400, y: 400 }, b: { x: 2000, y: 400 } }];
+  p.voids = [{ id: "v1", x: 800, y: 400, w: 80, h: 100 }];
+  p.comments = [{ id: "c1", x: 500, y: 500, text: "确认点位" }];
+  const valid = validatePlan(p);
+  assert.equal(valid.elec[0].h, 300);
+  assert.equal(valid.structs[0].w, 600);
+  assert.equal(valid.structs[0].rot, 0);
+  assert.equal(valid.beams[0].depth, 400);
+  assert.deepEqual(valid.comments[0].replies, []);
+  for (const [key, field, value] of [
+    ["elec", "kind", "unavailable"],
+    ["elec", "links", 42],
+    ["structs", "kind", "unavailable"],
+    ["beams", "a", null],
+    ["measures", "b", { x: 22 }],
+    ["voids", "w", 0],
+    ["comments", "replies", {}],
+  ]) {
+    const bad = structuredClone(p);
+    bad[key][0][field] = value;
+    assert.throws(
+      () => validatePlan(bad),
+      (e) => e.message.includes(key + "[" + bad[key][0].id + "]." + field),
+    );
+  }
+  assert.equal(p.structs[0].w, undefined);
+});
 test("invalid numbers and duplicate IDs are rejected", () => {
   const p = demoPlan();
   p.furniture[0].x = Infinity;
@@ -152,6 +437,7 @@ test("door handing works through both providers and unsupported fields fail atom
   }
   const p = demoPlan();
   p.walls[1].bearing = false;
+  p.walls[1].bearingFrom = "drawing";
   const added = applyOperations(p, [
     {
       op: "add_opening",

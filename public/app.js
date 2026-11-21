@@ -12,6 +12,7 @@ let current = null,
   workspaceLocked = false,
   controller = null,
   selectedImage = null,
+  imageSelection = 0,
   selectedFurniture = null,
   pending = null,
   requestSequence = 0,
@@ -19,6 +20,12 @@ let current = null,
   loginUrl = "";
 const requests = new Map();
 async function api(path, body) {
+  if (
+    body !== undefined &&
+    current &&
+    path.startsWith(`/api/projects/${current.project.id}/`)
+  )
+    body = { lifecycle: current.project.lifecycle ?? 0, ...body };
   const r = await fetch(
     path,
     body === undefined
@@ -52,6 +59,8 @@ $("chat-input").addEventListener("input", fitComposer);
 function rpc(action, payload, session = current) {
   if (!session || session !== current || !session.active || !session.ready)
     return Promise.reject(new Error("设计器正在加载，请稍候"));
+  if (action === "checks")
+    payload = { preferences: session.project.designPreferences };
   const requestId = ++requestSequence;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -83,6 +92,9 @@ function lockWorkspace(locked, label) {
     "chat-tools",
     "pending-proposal",
     "selection-details",
+    "design-scope",
+    "layout-feedback",
+    "image-recovery",
   ])
     $(id).inert = unavailable;
   $("home-button").disabled = locked;
@@ -138,11 +150,34 @@ window.addEventListener("message", async (event) => {
   if (data.type === "ready") {
     current.ready = true;
     lockWorkspace(workspaceLocked, "正在保存当前方案…");
+    showModelWarnings(current, data.missingModels, data.modelWarnings);
+    if (data.viewWarning) toast(data.viewWarning);
     saveNow("打开并整理模型").catch((e) => toast(e.message));
   }
   if (data.type === "three-ready") showLayoutFeedback(data.issues);
+  if (data.type === "pending-openings") showPendingOpenings(data.items);
+  if (data.type === "repair-marker")
+    beginOpeningRepair(data.id).catch((e) => toast(e.message));
+  if (data.type === "split-panel") {
+    if (data.open && innerWidth <= 1200 && !$("chat-panel").hidden) {
+      current.restoreChat = true;
+      setChatVisible(false);
+    } else if (!data.open && current.restoreChat) {
+      current.restoreChat = false;
+      setChatVisible(true);
+    }
+  }
   if (data.type === "changed") scheduleSave();
   if (data.type === "selection") {
+    if (
+      data.selection.kind === "wall" &&
+      !$("repair-form").hidden &&
+      repairWalls.some((w) => w.id === data.selection.id) &&
+      $("repair-wall").value !== data.selection.id
+    ) {
+      $("repair-wall").value = data.selection.id;
+      updateRepairPosition();
+    }
     const previousSelection = selectedFurniture;
     $("selection-chip").hidden = !data.label;
     $("selection-chip").textContent = data.label
@@ -205,15 +240,189 @@ for (const button of document.querySelectorAll("[data-color]")) {
     }
   };
 }
+function showModelWarnings(session, missing = [], warnings = []) {
+  const panel = $("model-feedback");
+  panel.replaceChildren();
+  panel.hidden = !(missing.length || warnings.length);
+  for (const text of warnings) panel.append(make("p", "", text));
+  if (!missing.length) return;
+  panel.append(
+    make(
+      "p",
+      "",
+      "模型文件缺失或损坏。选择原始 GLB 可恢复模型并保留它在图中的位置和尺寸。",
+    ),
+  );
+  for (const model of missing) {
+    const button = make("button", "secondary", "补回模型 · " + model.name);
+    const input = make("input");
+    input.type = "file";
+    input.accept = ".glb";
+    input.hidden = true;
+    button.onclick = () => input.click();
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return;
+      try {
+        await inWorkspace(async () => {
+          requireSession(session);
+          await rpc("restoreModel", { id: model.id, file }, session);
+          await saveNow(undefined, session);
+          await openProject(session.project.id, session.variant.id);
+        }, "正在恢复模型…");
+      } catch (error) {
+        toast(error.message);
+      }
+      input.value = "";
+    };
+    panel.append(button, input);
+  }
+  toast("有模型文件需要补回，可在「一起设计」中选择原始 GLB。");
+}
 function showLayoutFeedback(issues = []) {
   const count = issues.filter((i) => i.level === "error").length;
+  if (!count && $("layout-feedback").contains(document.activeElement))
+    $("check-plan").focus();
   $("layout-feedback").hidden = !count;
   $("layout-feedback-text").textContent =
-    `检测到 ${count} 处家具重叠或墙体冲突`;
+    `检查发现 ${count} 处需要处理的设计问题`;
 }
+let repairId = null,
+  repairWalls = [];
+function needsRecognitionCopy(session) {
+  return (
+    session.project.imageImport?.edited ||
+    session.project.variants.length > 1 ||
+    session.variant.messages.length > 0
+  );
+}
+function showImageRecovery(session) {
+  const source = session.project.imageImport;
+  $("trace-source").hidden = !source;
+  if (source) {
+    $("source-reason").textContent = source.reason
+      ? `自动识别未完成。${source.reason}`
+      : "可校准已知长度，沿墙线描图，也可以使用 AI 识别原图。";
+    $("retry-source").textContent = needsRecognitionCopy(session)
+      ? "用原图另建识别项目"
+      : "重新识别原图";
+  }
+  $("image-recovery").hidden = !source && $("pending-openings").hidden;
+}
+function showPendingOpenings(items) {
+  if (!current) return;
+  const group = $("pending-openings");
+  group.hidden = !items.length;
+  const unit = items.every((o) => /window|bay/i.test(o.type))
+    ? "扇窗"
+    : items.every((o) =>
+          [
+            "door",
+            "double",
+            "unequal",
+            "sliding",
+            "folding",
+            "pocket",
+            "garage",
+          ].includes(o.type),
+        )
+      ? "扇门"
+      : "处门窗";
+  $("pending-count").textContent = `草稿已保存，${items.length} ${unit}待定位`;
+  const buttons = items.map((o) => {
+    const b = make("button", "quiet", `标记 ${o.ordinal} · 指定所属墙`);
+    b.type = "button";
+    b.dataset.openingId = o.id;
+    b.onclick = () => beginOpeningRepair(o.id).catch((e) => toast(e.message));
+    return b;
+  });
+  $("pending-list").replaceChildren(...buttons);
+  if (!items.some((o) => o.id === repairId)) {
+    repairId = null;
+    $("repair-form").hidden = true;
+  }
+  showImageRecovery(current);
+}
+async function beginOpeningRepair(id) {
+  const session = current;
+  const { item, labels, walls } = await rpc("prepareOpening", { id }, session);
+  requireSession(session);
+  setChatVisible(true);
+  repairId = id;
+  repairWalls = walls;
+  $("repair-title").textContent = `原图门窗 ${item.ordinal}`;
+  $("repair-reason").textContent =
+    item.reason +
+    "。" +
+    (item.pixel
+      ? "请对照编号标记，选择所属墙。"
+      : "原图缺少位置标记，请对照底图选择墙和距离。");
+  $("repair-type").replaceChildren(
+    ...Object.entries(labels).map(([value, label]) => new Option(label, value)),
+  );
+  $("repair-type").value = item.type;
+  $("repair-wall").replaceChildren(
+    new Option("请选择图中的墙", ""),
+    ...walls.map((w) => new Option(w.label, w.id)),
+  );
+  $("repair-pos").value = "";
+  for (const k of ["width", "sill", "head"]) $("repair-" + k).value = item[k];
+  $("repair-error").textContent = walls.length
+    ? ""
+    : "请先描出这扇门窗所在的墙。";
+  $("repair-form").hidden = false;
+  $("repair-wall").focus();
+}
+function updateRepairPosition() {
+  const wall = repairWalls.find((w) => w.id === $("repair-wall").value);
+  $("repair-pos").value = wall?.pos ?? "";
+}
+$("repair-wall").onchange = () => {
+  updateRepairPosition();
+  if ($("repair-wall").value)
+    rpc("select", { kind: "wall", id: $("repair-wall").value }).catch((e) =>
+      toast(e.message),
+    );
+};
+$("cancel-repair").onclick = () => {
+  $("repair-form").hidden = true;
+  [...$("pending-list").children]
+    .find((b) => b.dataset.openingId === repairId)
+    ?.focus();
+  repairId = null;
+};
+$("repair-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const session = current;
+  try {
+    await inWorkspace(async () => {
+      requireSession(session);
+      const input = {
+        id: repairId,
+        wall: $("repair-wall").value,
+        type: $("repair-type").value,
+      };
+      for (const k of ["pos", "width", "sill", "head"])
+        input[k] = $("repair-" + k).valueAsNumber;
+      await rpc("attachOpening", input, session);
+      await saveNow("手动指定门窗所属墙", session);
+      showLayoutFeedback((await rpc("checks", undefined, session)).issues);
+    });
+    ($("pending-list").firstElementChild ?? $("check-plan")).focus();
+    toast("门窗已放置并保存。");
+  } catch (error) {
+    $("repair-error").textContent = error.message;
+    toast(error.message);
+  }
+};
+for (const [id, tool] of [
+  ["trace-wall", "wall"],
+  ["calibrate-source", "calibrate"],
+])
+  $(id).onclick = () => rpc("sourceTool", tool).catch((e) => toast(e.message));
 $("fix-layout").onclick = () => {
   $("chat-input").value =
-    "请根据当前检查结果，优先解决家具重叠和嵌入墙体的问题。只调整相关家具，保留墙体、门窗和其他布置。";
+    "请根据当前检查说明问题并提出修正。优先调整相关家具，保留原有墙体和门窗。";
   fitComposer();
   $("chat-input").focus();
 };
@@ -285,7 +494,10 @@ async function openProject(projectId, variantId) {
     readState: () => rpc("state", undefined, session),
     write: api,
     status: (text, dirty) => {
-      if (current === session) saveLabel(text, dirty);
+      if (current === session) {
+        saveLabel(text, dirty);
+        if (session.project.imageImport) showImageRecovery(session);
+      }
     },
   });
   current = session;
@@ -307,11 +519,23 @@ async function openProject(projectId, variantId) {
     ...project.assumptions.map((text) => make("li", "", text)),
   );
   $("assumptions").hidden = !project.assumptions.length;
+  (project.imageImport ? $("trace-source") : $("assumptions")).append(
+    $("drawing-actions"),
+  );
+  $("drawing-actions").hidden = !project.underlay;
+  $("layout-locked").checked =
+    project.designPreferences?.layoutLocked !== false;
+  $("freestanding-storage").checked =
+    !!project.designPreferences?.allowFreestandingStorage;
   $("show-underlay").hidden = !project.underlay;
   $("selection-chip").hidden = true;
   selectedFurniture = null;
   $("selection-details").hidden = true;
   $("layout-feedback").hidden = true;
+  repairId = null;
+  $("repair-form").hidden = true;
+  showPendingOpenings(variant.plan.pendingOpenings ?? []);
+  $("model-feedback").hidden = true;
   $("chat-input").value = "";
   fitComposer();
   renderMessages();
@@ -327,20 +551,138 @@ async function goHome() {
   return inWorkspace(async (session) => {
     controller?.abort();
     await saveNow(undefined, session);
-    clearPending();
-    session?.dispose();
-    current = null;
-    $("designer").src = "about:blank";
-    $("editor-view").hidden = true;
-    $("project-toolbar").hidden = true;
-    $("toggle-chat").hidden = true;
-    $("home-view").hidden = false;
-    document.body.classList.remove("editing");
-    selectedFurniture = null;
-    $("selection-details").hidden = true;
+    leaveEditor();
     await renderProjects();
   });
 }
+function leaveEditor() {
+  clearPending();
+  current?.dispose();
+  current = null;
+  for (const request of requests.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error("项目已关闭"));
+  }
+  requests.clear();
+  $("designer").src = "about:blank";
+  $("editor-view").hidden = true;
+  $("project-toolbar").hidden = true;
+  $("toggle-chat").hidden = true;
+  $("home-view").hidden = false;
+  document.body.classList.remove("editing");
+  selectedFurniture = null;
+  $("selection-details").hidden = true;
+}
+for (const id of ["layout-locked", "freestanding-storage"])
+  $(id).onchange = async () => {
+    const session = current;
+    if (!session || workspaceLocked) return;
+    controller?.abort();
+    clearPending();
+    try {
+      await inWorkspace(async () => {
+        session.project.designPreferences = await api(
+          `/api/projects/${session.project.id}/preferences`,
+          {
+            lifecycle: session.project.lifecycle ?? 0,
+            layoutLocked: $("layout-locked").checked,
+            allowFreestandingStorage: $("freestanding-storage").checked,
+          },
+        );
+        showLayoutFeedback((await rpc("checks", undefined, session)).issues);
+      }, "正在保存设计范围…");
+    } catch (error) {
+      $("layout-locked").checked =
+        session.project.designPreferences?.layoutLocked !== false;
+      $("freestanding-storage").checked =
+        !!session.project.designPreferences?.allowFreestandingStorage;
+      toast(error.message);
+    }
+  };
+let deletionTarget = null;
+function askDelete(project) {
+  deletionTarget = project;
+  $("delete-description").textContent =
+    `将“${project.name}”及其中 ${project.variantCount ?? project.variants.length} 套方案移入回收站？`;
+  $("delete-error").textContent = "";
+  $("delete-dialog").showModal();
+  $("cancel-delete").focus();
+}
+$("delete-project").onclick = () => current && askDelete(current.project);
+$("cancel-delete").onclick = () => $("delete-dialog").close();
+$("confirm-delete").onclick = async () => {
+  const target = deletionTarget;
+  if (!target || workspaceLocked) return;
+  $("confirm-delete").disabled = true;
+  $("cancel-delete").disabled = true;
+  try {
+    await inWorkspace(async (session) => {
+      if (session?.project.id === target.id) {
+        controller?.abort();
+        clearPending();
+        await saveNow(undefined, session);
+      }
+      await api(`/api/projects/${target.id}/trash`, {
+        lifecycle: target.lifecycle ?? 0,
+      });
+      if (current?.project.id === target.id) leaveEditor();
+      await renderProjects();
+    }, "正在移入回收站…");
+    $("delete-dialog").close();
+    toast("项目已移入回收站，可以恢复。");
+  } catch (error) {
+    $("delete-error").textContent = error.message;
+  } finally {
+    $("confirm-delete").disabled = false;
+    $("cancel-delete").disabled = false;
+  }
+};
+$("delete-dialog").addEventListener("cancel", (event) => {
+  if ($("confirm-delete").disabled) event.preventDefault();
+});
+async function renderTrash() {
+  const { projects, unreadable } = await api("/api/trash?diagnostics=1");
+  showUnreadable($("trash-diagnostics"), unreadable);
+  $("trash-list").replaceChildren();
+  if (!projects.length)
+    $("trash-list").append(make("p", "empty-projects", "回收站是空的。"));
+  for (const p of projects) {
+    const row = make("div", "trash-row"),
+      info = make("div"),
+      restore = make("button", "secondary", "恢复项目");
+    row.dataset.projectId = p.id;
+    info.append(
+      make("strong", "", p.name),
+      make(
+        "p",
+        "hint",
+        `${p.variantCount} 套方案 · ${new Date(p.deletedAt).toLocaleDateString("zh-CN")}`,
+      ),
+    );
+    restore.onclick = async () => {
+      restore.disabled = true;
+      try {
+        await api(`/api/projects/${p.id}/restore`, { lifecycle: p.lifecycle });
+        await renderTrash();
+        await renderProjects();
+        toast(`已恢复“${p.name}”`);
+      } catch (error) {
+        restore.disabled = false;
+        toast(error.message);
+      }
+    };
+    row.append(info, restore);
+    $("trash-list").append(row);
+  }
+}
+$("open-trash").onclick = async () => {
+  try {
+    await renderTrash();
+    $("trash-dialog").showModal();
+  } catch (error) {
+    toast(error.message);
+  }
+};
 function drawPreview(canvas, plan) {
   const ctx = canvas.getContext("2d");
   canvas.width = 660;
@@ -386,10 +728,36 @@ function drawPreview(canvas, plan) {
     ctx.stroke();
   }
 }
+function showUnreadable(element, records) {
+  element.hidden = !records.length;
+  element.replaceChildren();
+  if (!records.length) return;
+  element.append(make("summary", "", records.length + " 个项目文件无法读取"));
+  element.append(
+    make(
+      "p",
+      "",
+      "原文件保存在工作区的 projects 文件夹。请先复制文件留存，再尝试从备份恢复。",
+    ),
+  );
+  const list = make("ul");
+  for (const { file, reason } of records)
+    list.append(make("li", "", file + " · " + reason));
+  element.append(list);
+}
 async function renderProjects() {
-  const projects = await api("/api/projects");
+  const { projects, unreadable } = await api("/api/projects?diagnostics=1");
+  showUnreadable($("project-diagnostics"), unreadable);
   $("project-count").textContent = projects.length + " 个本地项目";
   $("project-list").replaceChildren();
+  if (!projects.length)
+    $("project-list").append(
+      make(
+        "p",
+        "empty-projects",
+        "还没有项目。可以导入户型或方案，也可以从回收站恢复。",
+      ),
+    );
   for (const p of projects) {
     const card = make("button", "project-card"),
       preview = make("div", "project-preview"),
@@ -398,16 +766,26 @@ async function renderProjects() {
     preview.append(canvas);
     const line = make("p");
     line.append(
-      make("span", "", p.variantCount + " 套设计方案"),
+      make(
+        "span",
+        "",
+        p.hasImage && !p.preview.walls.length
+          ? "原图草稿 · 可继续描墙"
+          : p.variantCount + " 套设计方案",
+      ),
       make("span", "", new Date(p.updatedAt).toLocaleDateString("zh-CN")),
     );
     body.append(make("h3", "", p.name), line);
     card.append(preview, make("span", "arrow", "↗"), body);
     card.onclick = () => loadProject(p.id).catch((e) => toast(e.message));
-    $("project-list").append(card);
-    api("/api/projects/" + p.id)
-      .then((full) => drawPreview(canvas, full.variants[0].plan))
-      .catch(() => {});
+    const entry = make("div", "project-entry"),
+      remove = make("button", "quiet project-delete", "删除项目");
+    entry.dataset.projectId = p.id;
+    remove.setAttribute("aria-label", `删除项目 ${p.name}`);
+    remove.onclick = () => askDelete(p);
+    entry.append(card, remove);
+    $("project-list").append(entry);
+    drawPreview(canvas, p.preview);
   }
 }
 async function readStream(path, body, signal, onEvent) {
@@ -466,7 +844,21 @@ async function applyProposal(session, proposal, expected, baseRevision) {
   requireSession(session);
   if (session.revision !== baseRevision)
     throw new Error("方案已更新，请重新提出这条需求");
-  const state = await rpc("apply", { plan: proposal.plan, expected }, session);
+  await api(session.endpoint("review"), {
+    plan: proposal.plan,
+    revision: baseRevision,
+    lifecycle: session.project.lifecycle ?? 0,
+  });
+  requireSession(session);
+  const state = await rpc(
+    "apply",
+    {
+      plan: proposal.plan,
+      expected,
+      preferences: session.project.designPreferences,
+    },
+    session,
+  );
   await saveNow("AI：" + proposal.summary.join("；"), session);
   showLayoutFeedback(state.issues);
   await recordAction(
@@ -559,6 +951,7 @@ $("chat-form").addEventListener("submit", async (event) => {
       {
         message,
         revision: baseRevision,
+        lifecycle: session.project.lifecycle ?? 0,
         selection: state.selection,
         checks: checks.issues,
       },
@@ -632,23 +1025,65 @@ $("undo-ai").onclick = async () => {
     toast(e.message);
   }
 };
-$("check-plan").onclick = async () => {
+async function showPlanChecks() {
   try {
-    const r = await rpc("checks");
-    appendMessage(
+    const session = current,
+      { issues } = await rpc("checks", undefined, session);
+    requireSession(session);
+    showLayoutFeedback(issues);
+    if (!issues.length) {
+      appendMessage(
+        "assistant",
+        "当前设计器检查没有发现问题。尺寸和施工条件仍以现场核实为准。",
+      );
+      return;
+    }
+    const message = appendMessage(
       "assistant",
-      r.issues.length
-        ? "当前检查：\n" +
-            r.issues
-              .slice(0, 16)
-              .map((i) => "· " + i.msg)
-              .join("\n")
-        : "当前设计器检查没有发现问题。尺寸和施工条件仍以现场核实为准。",
+      `当前检查共 ${issues.length} 项`,
     );
+    for (const [level, label] of [
+      ["error", "需要处理"],
+      ["warn", "建议核对"],
+      ["other", "其他提示"],
+    ]) {
+      const group = issues.filter((i) =>
+        level === "other"
+          ? !["error", "warn"].includes(i.level)
+          : i.level === level,
+      );
+      if (!group.length) continue;
+      const section = make("details", "check-group");
+      section.open = level === "error" || !message.querySelector("details");
+      section.append(make("summary", "", label + " · " + group.length));
+      const list = make("ul");
+      for (const issue of group) {
+        const row = make("li", "", issue.msg);
+        const target = issue.targets?.[0];
+        if (target) {
+          const locate = make("button", "quiet", "在图中定位");
+          locate.onclick = async () => {
+            try {
+              requireSession(session);
+              await rpc("view", "2d", session);
+              await rpc("select", target, session);
+            } catch (error) {
+              toast(error.message);
+            }
+          };
+          row.append(locate);
+        }
+        list.append(row);
+      }
+      section.append(list);
+      message.append(section);
+    }
   } catch (e) {
     toast(e.message);
   }
-};
+}
+$("check-plan").onclick = showPlanChecks;
+$("locate-layout-issues").onclick = showPlanChecks;
 $("show-underlay").onclick = async () => {
   try {
     await rpc("view", "2d");
@@ -662,18 +1097,25 @@ $("show-underlay").onclick = async () => {
 };
 $("export-plan").onclick = async () => {
   try {
-    await saveNow();
-    const s = await rpc("state"),
-      text = JSON.stringify(s.plan, null, 2);
+    const { name, text } = await inWorkspace(async (session) => {
+      requireSession(session);
+      await saveNow(undefined, session);
+      const file = await api(session.endpoint("export"));
+      return {
+        name: (file.plan ?? file).name,
+        text: file.models
+          ? JSON.stringify(file)
+          : JSON.stringify(file, null, 2),
+      };
+    });
     if (window.desktop) {
-      if (await desktop.exportPlan({ name: s.plan.name, text }))
-        toast("方案已导出");
+      if (await desktop.exportPlan({ name, text })) toast("方案已导出");
     } else {
       const a = make("a");
       a.href = URL.createObjectURL(
         new Blob([text], { type: "application/json" }),
       );
-      a.download = s.plan.name + ".json";
+      a.download = name + ".json";
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     }
@@ -711,7 +1153,10 @@ function setChatVisible(visible) {
   $("chat-panel").hidden = !visible;
   $("toggle-chat").setAttribute("aria-expanded", String(visible));
 }
-$("toggle-chat").onclick = () => setChatVisible($("chat-panel").hidden);
+$("toggle-chat").onclick = () => {
+  if (current) current.restoreChat = false;
+  setChatVisible($("chat-panel").hidden);
+};
 $("close-chat").onclick = () => {
   setChatVisible(false);
   $("toggle-chat").focus();
@@ -722,7 +1167,8 @@ async function loadSettings() {
     "ready",
     settings.provider === "api" && !!settings.model,
   );
-  if (settings.provider === "codex") refreshCodex().catch(() => {});
+  if (settings.provider === "codex" && !settings.settingsError)
+    refreshCodex().catch(() => {});
 }
 function providerFields() {
   const isApi = $("model-provider").value === "api";
@@ -744,7 +1190,9 @@ function openSettings() {
   $("api-key").placeholder = settings?.hasKey
     ? "已有加密密钥；留空保留，输入可替换"
     : "输入 API 密钥；无密钥服务可留空";
-  $("settings-result").textContent = "";
+  const warning = settings?.settingsError || settings?.credentialError || "";
+  $("settings-result").textContent = warning;
+  $("settings-result").classList.toggle("error", !!warning);
   providerFields();
   $("settings-dialog").showModal();
   refreshCodex().catch((e) => {
@@ -858,25 +1306,27 @@ for (const button of document.querySelectorAll("[data-close]"))
   button.onclick = () => {
     if (button.dataset.close === "import-dialog" && controller) {
       controller.abort();
-      controller = null;
     }
     $(button.dataset.close).close();
   };
 $("new-project").onclick = () => {
-  if (
-    settings?.provider !== "codex" &&
-    !settings?.model &&
-    !settings?.visionModel
-  ) {
-    openSettings();
-    toast("先设置一个支持图片输入的模型，然后导入户型图。");
-    return;
-  }
+  imageSelection++;
+  selectedImage = null;
+  $("floorplan-file").value = "";
+  $("image-preview").hidden = true;
+  $("image-preview").removeAttribute("src");
+  $("drop-placeholder").hidden = false;
+  $("import-result").textContent = "";
   $("import-dialog").showModal();
 };
 $("import-dialog").addEventListener("cancel", () => controller?.abort());
 async function acceptImage(file) {
-  if (!file || !["image/png", "image/jpeg", "image/webp"].includes(file.type))
+  if (!file) return;
+  const selection = ++imageSelection;
+  selectedImage = null;
+  $("image-preview").hidden = true;
+  $("drop-placeholder").hidden = false;
+  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type))
     throw new Error("请选择 PNG、JPG 或 WebP 图片");
   if (file.size > 30_000_000) throw new Error("图片超过 30 MB，请先缩小");
   const bitmap = await createImageBitmap(file),
@@ -889,7 +1339,9 @@ async function acceptImage(file) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
+  if (selection !== imageSelection) return;
   selectedImage = {
+    name: file.name.replace(/\.[^.]+$/, "").slice(0, 180),
     dataUrl: canvas.toDataURL("image/jpeg", 0.92),
     width: canvas.width,
     height: canvas.height,
@@ -921,57 +1373,122 @@ for (const event of ["dragleave", "drop"])
         toast(error.message),
       );
   });
-$("import-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (controller) return;
-  if (!selectedImage) {
-    toast("请先选择户型图");
-    return;
-  }
+async function generateImage(input, retry = false) {
+  const dialog = $(retry ? "retry-dialog" : "import-dialog");
+  const progress = $(retry ? "retry-progress" : "import-result");
+  let projectId = input.copySource ? null : input.projectId;
   const abort = new AbortController();
   controller = abort;
   $("generate-button").disabled = true;
-  $("cancel-generate").hidden = false;
-  $("import-result").classList.remove("error");
+  $("manual-import").disabled = true;
+  $("cancel-generate").hidden = true;
+  progress.classList.remove("error");
+  progress.textContent = retry ? "正在读取已保存的底图…" : "正在保存原图草稿…";
+  if (retry) dialog.showModal();
   try {
     const result = await readStream(
       "/api/generate",
-      {
-        image: selectedImage,
-        brief: $("design-brief").value,
-        height: Math.round(Number($("ceiling-height").value) * 1000),
-        widthMeters: $("known-width").value
-          ? Number($("known-width").value)
-          : undefined,
-        schemeCount: Number($("scheme-count").value),
-      },
+      input,
       abort.signal,
       (event) => {
-        if (event.type === "status")
-          $("import-result").textContent = event.text;
+        if (event.type === "source") {
+          projectId = event.projectId;
+          if (!retry && !input.manualOnly) $("cancel-generate").hidden = false;
+        }
+        if (event.text) progress.textContent = event.text;
       },
     );
     controller = null;
-    $("import-dialog").close();
+    if (dialog.open) dialog.close();
     await loadProject(result.projectId);
-    toast("设计方案已生成。先查看 3D，再核对尺寸与原图。");
+    if (result.draftStatus === "underlay") {
+      toast("已打开原图草稿，可校准尺寸并描墙。");
+    } else if (result.draftStatus === "partial") {
+      $("assumptions").open = true;
+      toast("已打开可编辑草稿。保留情况见「识图与尺寸待确认」。");
+    } else if (result.draftStatus === "review") {
+      toast("已打开可编辑草稿。可查看并定位需要调整的地方。");
+    } else {
+      toast("设计方案已生成。先查看 3D，再核对尺寸与原图。");
+    }
   } catch (error) {
-    $("import-result").textContent =
-      error.name === "AbortError" ? "已停止生成。" : error.message;
-    $("import-result").classList.add("error");
+    if (controller === abort) controller = null;
+    if (projectId && dialog.open) {
+      dialog.close();
+      try {
+        await loadProject(projectId);
+        toast(
+          error.name === "AbortError"
+            ? "已停止识别并打开保存的草稿。"
+            : error.message,
+        );
+      } catch (openError) {
+        toast(openError.message);
+      }
+    } else {
+      progress.textContent =
+        error.name === "AbortError" ? "已停止识别。" : error.message;
+      progress.classList.add("error");
+      if (!dialog.open && !current) await renderProjects();
+    }
   } finally {
     if (controller === abort) controller = null;
     $("generate-button").disabled = false;
+    $("manual-import").disabled = false;
     $("cancel-generate").hidden = true;
   }
+}
+$("import-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (controller) return;
+  if (!selectedImage) return toast("请先选择户型图");
+  const { name, ...image } = selectedImage;
+  await generateImage({
+    image,
+    name,
+    manualOnly: e.submitter?.id === "manual-import",
+    brief: $("design-brief").value,
+    height: Math.round(Number($("ceiling-height").value) * 1000),
+    widthMeters: $("known-width").value
+      ? Number($("known-width").value)
+      : undefined,
+    schemeCount: Number($("scheme-count").value),
+  });
 });
+$("retry-source").onclick = async () => {
+  if (controller || workspaceLocked) return;
+  const session = current,
+    copyShown = $("retry-source").textContent.includes("另建");
+  try {
+    await inWorkspace(() => saveNow(undefined, session));
+    requireSession(session);
+    const copySource = !!needsRecognitionCopy(session);
+    if (copySource && !copyShown) {
+      showImageRecovery(session);
+      toast("已保存手动编辑。点击「用原图另建识别项目」可保留这份描图。");
+      return;
+    }
+    await generateImage(
+      {
+        projectId: session.project.id,
+        lifecycle: session.project.lifecycle,
+        copySource,
+      },
+      true,
+    );
+  } catch (error) {
+    toast(error.message);
+  }
+};
+$("retry-dialog").addEventListener("cancel", () => controller?.abort());
+$("stop-retry").onclick = () => controller?.abort();
 $("cancel-generate").onclick = () => controller?.abort();
 $("import-plan").onclick = () => $("plan-file").click();
 $("plan-file").onchange = async () => {
   try {
     const f = $("plan-file").files[0];
     if (!f) return;
-    if (f.size > 16_000_000) throw new Error("方案文件超过 16 MB");
+    if (f.size > 96_000_000) throw new Error("方案文件超过 96 MB");
     const plan = JSON.parse(await f.text());
     const p = await api("/api/import", { plan });
     await loadProject(p.id);

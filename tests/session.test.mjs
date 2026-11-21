@@ -37,6 +37,9 @@ test("a save drains edits made while its first write is in flight", async () => 
     ),
   );
   assert.equal(writes[1].revision, "r1");
+  assert.ok(!Object.hasOwn(writes[0], "underlay"));
+  assert.deepEqual(writes[1].underlay, { x: 10 });
+  assert.equal(writes[1].expectedUnderlayVersion, 0);
   assert.equal(final.plan.x, 200);
   assert.deepEqual(session.project.underlay, { x: 10 });
 });
@@ -66,4 +69,26 @@ test("a failed save preserves the baseline and permits retry", async () => {
   assert.equal(session.revision, "r1");
   session.dispose();
   assert.equal(await session.save(), undefined);
+});
+
+test("disposing a project during a state read prevents a late write", async () => {
+  const read = Promise.withResolvers();
+  let writes = 0;
+  const session = new EditorSession(
+    { id: "p", lifecycle: 2, underlay: null },
+    { id: "v", plan: { x: 0 }, revision: "r" },
+    {
+      readState: () => read.promise,
+      status() {},
+      write: async () => {
+        writes++;
+      },
+    },
+  );
+  session.ready = true;
+  const saving = session.save();
+  session.dispose();
+  read.resolve({ plan: { x: 1 }, underlay: null });
+  await saving;
+  assert.equal(writes, 0);
 });
