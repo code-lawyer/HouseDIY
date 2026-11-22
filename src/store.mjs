@@ -441,7 +441,7 @@ export function createStore(directory, secretCodec) {
       atomic(projectPath(projectId), p);
       return get(projectId);
     },
-    purgeTrash(projects) {
+    purgeTrash(projects, queueModelCleanup) {
       if (!Array.isArray(projects) || !projects.length)
         throw new Error("待永久删除的项目列表无效");
       const targets = new Map();
@@ -458,22 +458,24 @@ export function createStore(directory, secretCodec) {
         targets.set(id, projectModelIds(p));
       }
 
-      let deletedCount = 0;
       const modelIds = new Set();
-      for (const [id, candidates] of targets) {
+      for (const candidates of targets.values())
+        for (const id of candidates ?? []) modelIds.add(id);
+      queueModelCleanup(modelIds);
+
+      let deletedCount = 0;
+      for (const id of targets.keys()) {
         try {
           rmSync(projectPath(id), { force: true });
         } catch {
           continue;
         }
         catalogIndex.delete(id);
-        for (const candidate of candidates ?? []) modelIds.add(candidate);
         deletedCount++;
       }
       return {
         deletedCount,
         failedCount: targets.size - deletedCount,
-        modelIds,
       };
     },
     referencedModels() {
@@ -581,7 +583,15 @@ export function createStore(directory, secretCodec) {
             join(directory, `settings-unreadable-${id()}.bak`),
             constants.COPYFILE_EXCL,
           );
-        atomic(settingsPath, next);
+        // Older previews recognize the on-disk Codex marker and flat settings.
+        // Keep their fallback local if a user opens the workspace in an older EXE.
+        atomic(settingsPath, {
+          ...next,
+          provider: provider === "agent" ? "codex" : provider,
+          codexPath: next.agents.codex.path,
+          codexModel: next.agents.codex.model,
+          codexEffort: next.agents.codex.effort,
+        });
         return this.publicSettings();
       };
       const result = settingsWrites.then(write);

@@ -90,6 +90,7 @@ test(
       }),
     );
     assert.deepEqual(agentExecutable("gemini", join(prefix, "gemini.cmd")), {
+      kind: "gemini",
       file: process.execPath,
       prefix: [entry],
     });

@@ -94,7 +94,10 @@ if (args[0] === "--version") {
     const {
       message: { content },
     } = JSON.parse(input);
-    assert.deepEqual(content[0], { type: "text", text: "synthetic plan" });
+    assert.equal(content[0].type, "text");
+    assert.ok(content[0].text.startsWith("synthetic plan"));
+    assert.ok(content[0].text.includes('"operations"'));
+    assert.ok(!args.includes("--json-schema"));
     if (content[1])
       assert.deepEqual(content[1].source, {
         type: "base64",
@@ -104,7 +107,7 @@ if (args[0] === "--version") {
     output({
       type: "result",
       subtype: "success",
-      structured_output: response(content[1]),
+      result: JSON.stringify(response(content[1])),
     });
   }
 }

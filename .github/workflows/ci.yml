@@ -47,6 +47,7 @@ jobs:
           HOUSEDIY_PLAN_FIXTURE: examples/demo-plan.json
         run: npm run test:package
       - name: Bind the tested executable to the source commit
+        id: release-proof
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -66,14 +67,15 @@ jobs:
           }
           Set-Content -Encoding ascii -LiteralPath "release/HouseDIY-$version-portable.sha256" -Value "$sha  $asset"
           Copy-Item -LiteralPath .qa/packaged/results.json -Destination "release/HouseDIY-$version-test-results.json"
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Upload the verified Windows artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: HouseDIY-windows-x64-${{ github.sha }}
           path: |
-            release/HouseDIY-*-portable.exe
-            release/HouseDIY-*-portable.sha256
-            release/HouseDIY-*-test-results.json
+            release/HouseDIY-${{ steps.release-proof.outputs.version }}-portable.exe
+            release/HouseDIY-${{ steps.release-proof.outputs.version }}-portable.sha256
+            release/HouseDIY-${{ steps.release-proof.outputs.version }}-test-results.json
           if-no-files-found: error
           compression-level: 0

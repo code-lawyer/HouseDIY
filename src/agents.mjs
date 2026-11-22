@@ -53,7 +53,8 @@ export async function agentStatus(kind, config, signal) {
         available: true,
         loggedIn: null,
         version: versionLabel,
-        message: "已找到 Gemini CLI。发送请求时使用终端已保存的 Google 登录。",
+        message:
+          "已找到 Gemini CLI。需要已登录的组织 Code Assist 账号，发送时验证资格。",
       };
     const auth = await runCli(
       cli,
@@ -189,11 +190,19 @@ async function claudeCompletion(
     "You return structured HouseDIY design data using the input provided.",
     "--settings",
     '{"disableAllHooks":true,"autoMemoryEnabled":false}',
-    "--json-schema",
-    JSON.stringify(schema),
   ];
   if (profile.model) args.push("--model", profile.model);
-  const content = [{ type: "text", text: prompt }];
+  // The Codex schema uses keywords Claude structured mode does not support.
+  // Keep it as prompt guidance and validate replies in the design pipeline.
+  const content = [
+    {
+      type: "text",
+      text:
+        prompt +
+        "\n只输出一个合法 JSON 对象，字段结构为：\n" +
+        JSON.stringify(schema),
+    },
+  ];
   if (image)
     content.push({
       type: "image",

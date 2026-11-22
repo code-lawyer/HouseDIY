@@ -137,7 +137,8 @@ export function agentExecutable(kind, configured = "") {
     throw new Error(
       `请指定已安装的 ${label} 可执行文件或官方 npm 入口的绝对路径。`,
     );
-  if (!/\.[cm]?js$/i.test(location)) return { file: location, prefix: [] };
+  if (!/\.[cm]?js$/i.test(location))
+    return { kind, file: location, prefix: [] };
   const node = !process.versions.electron
     ? process.execPath
     : [
@@ -152,13 +153,23 @@ export function agentExecutable(kind, configured = "") {
     throw new Error(
       `请先安装 Node.js 并将它加入 PATH，再使用 ${label} 的 npm 版本。`,
     );
-  return { file: node, prefix: [location] };
+  return { kind, file: node, prefix: [location] };
 }
 
-function environment(extra) {
+function environment(kind, extra) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     const name = key.toUpperCase();
+    // Keep Claude Code's own authentication selection. HouseDIY does not
+    // populate these variables with any credentials from its model settings.
+    if (
+      kind === "claude" &&
+      (name.startsWith("ANTHROPIC_") ||
+        name.startsWith("CLAUDE_CODE_USE_") ||
+        name === "CLAUDE_CODE_OAUTH_TOKEN" ||
+        name === "GOOGLE_APPLICATION_CREDENTIALS")
+    )
+      continue;
     if (
       (name.startsWith("CODEX_") && name !== "CODEX_HOME") ||
       (name.startsWith("CLAUDE_CODE_") &&
@@ -192,7 +203,7 @@ export function runCli(
     signal?.throwIfAborted();
     const child = spawn(command.file, [...command.prefix, ...args], {
       cwd,
-      env: environment(env),
+      env: environment(command.kind, env),
       windowsHide: true,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],

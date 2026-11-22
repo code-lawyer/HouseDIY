@@ -34,7 +34,7 @@ export async function startServer({
   const shapes = createShapeLibrary(store.directory);
   store.ensureDemo(seedFile);
   try {
-    models.pruneUnreferenced(new Set(), store.referencedModels);
+    models.pruneUnreferenced(store.referencedModels);
   } catch {
     // Preserve an unreadable cleanup queue and keep the projects accessible.
   }
@@ -226,11 +226,18 @@ export async function startServer({
       if (req.method === "POST" && path === "/api/trash/purge") {
         const input = await body(req);
         const result = await withModelChanges(() => {
-          const { modelIds, ...counts } = store.purgeTrash(input?.projects);
+          const counts = store.purgeTrash(input?.projects, (modelIds) => {
+            try {
+              models.queueCleanup(modelIds);
+            } catch {
+              throw new Error(
+                "无法记录附件清理，请检查工作区权限和清理记录，再重试永久删除。",
+              );
+            }
+          });
           // Project mutations cannot interleave with the synchronous reference check and pruning.
           try {
             const cleanupDeferred = models.pruneUnreferenced(
-              modelIds,
               store.referencedModels,
             );
             return { ...counts, ...(cleanupDeferred && { cleanupDeferred }) };
@@ -394,7 +401,7 @@ export async function startServer({
           return json(res, 404, { error: "这个项目仅有用于描图的底图副本" });
         const extension = source[1] === "jpeg" ? "jpg" : source[1];
         const filename = encodeURIComponent(
-          image.originalName || "floorplan." + extension,
+          (image.originalName || "floorplan." + extension).toWellFormed(),
         ).replaceAll("'", "%27");
         return res
           .writeHead(200, {

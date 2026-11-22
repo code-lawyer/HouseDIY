@@ -300,10 +300,13 @@ export function createModelLibrary(workspace) {
         if (error.code !== "ENOENT") throw error;
       });
     },
-    pruneUnreferenced(candidates, references) {
-      const queued = new Set([...pendingCleanup(), ...candidates]);
+    queueCleanup(candidates) {
+      if (candidates.size)
+        saveCleanup(new Set([...pendingCleanup(), ...candidates]));
+    },
+    pruneUnreferenced(references) {
+      const queued = new Set(pendingCleanup());
       if (!queued.size) return 0;
-      if (candidates.size) saveCleanup(queued);
       const referenced = references();
       if (!referenced) return queued.size;
       const deferred = new Set();

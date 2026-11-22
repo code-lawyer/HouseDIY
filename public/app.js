@@ -1258,7 +1258,8 @@ $("close-chat").onclick = () => {
 const agentHints = {
   codex: "安装官方 Codex CLI，先在终端运行 codex login。",
   claude: "安装官方 Claude Code CLI，先在终端运行 claude auth login。",
-  gemini: "安装新版 Gemini CLI，在终端运行 gemini 并完成 Google 登录。",
+  gemini:
+    "在终端用符合条件的组织 Code Assist 账号登录 Gemini CLI。个人 Google 登录已迁往 Antigravity。",
 };
 let agentDrafts = {},
   displayedAgent,

@@ -35,13 +35,17 @@ HouseDIY 是 Windows 桌面家居设计工具。导入户型图或已有方案�
 
 在终端安装并登录所选 CLI，再在 HouseDIY 中选择它。可点击「检测 CLI」查看检测结果，或在高级设置填入程序绝对路径。模型名称留空时使用 CLI 默认模型。
 
-| Agent           | 在终端登录                                                                                                                                       |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Codex CLI       | 运行 `codex login`。 [Codex CLI](https://github.com/openai/codex)                                                                                |
-| Claude Code CLI | 运行 `claude auth login`。 [Claude CLI 文档](https://code.claude.com/docs/en/cli-reference)                                                      |
-| Gemini CLI      | 运行 `gemini` 并选择 Google 登录。图片识别需要 CLI 支持 ACP 图片输入。 [Gemini CLI 文档](https://geminicli.com/docs/get-started/authentication/) |
+| Agent           | 在终端登录                                                                                                                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex CLI       | 运行 `codex login`。 [Codex CLI](https://github.com/openai/codex)                                                                                                                            |
+| Claude Code CLI | 在原版 CLI 中运行 `claude auth login`，由 CLI 自行认证及计费。 [Claude CLI 文档](https://code.claude.com/docs/en/cli-reference)                                                              |
+| Gemini CLI      | 使用符合条件的组织 Code Assist 登录。图片识别需要 CLI 的 ACP 图片能力。Google 个人登录已迁往 Antigravity CLI。 [Gemini CLI 官方说明](https://github.com/google-gemini/gemini-cli#gemini-cli) |
 
 各 CLI 的路径和模型独立保存。Windows 自动检测支持 PATH 中的原生程序和常见的官方 npm 安装。CLI 使用自己的登录、账号权限和额度。这个测试版的 CLI 与外部服务验收使用模拟响应。
+
+Claude Code 接入使用用户安装的原版 CLI，适用 Anthropic 的产品接入及使用条款。 [Claude Code 条款](https://code.claude.com/docs/en/legal-and-compliance#can-customers-offer-claude-code-in-their-products)
+
+Gemini CLI 可以在自己的数据目录保留会话。HouseDIY 项目删除的范围为工作区，CLI 会话可在 Gemini CLI 内管理。 [Gemini CLI 会话说明](https://geminicli.com/docs/cli/session-management/#automatic-saving)
 
 ### 外部 LLM API
 
