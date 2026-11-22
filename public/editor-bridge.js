@@ -4,6 +4,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await import("/design-rules.js");
   const D = window.__designer,
     meta = window.__HOUSEDIY__,
+    structureLabel = window.__wallStructureLabel,
     post = (data) =>
       parent.postMessage(
         { source: "housediy-editor", ...meta, ...data },

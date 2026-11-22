@@ -5,3 +5,8 @@ contextBridge.exposeInMainWorld("desktop", {
   onClose: (callback) => ipcRenderer.on("request-close", () => callback()),
   closeReady: () => ipcRenderer.send("close-ready"),
 });
+if (process.argv.includes("--housediy-qa-capture")) {
+  contextBridge.exposeInMainWorld("qaCapturePage", () =>
+    ipcRenderer.invoke("qa-capture-page"),
+  );
+}

@@ -19,7 +19,9 @@ app.setPath(
     overrideDir: process.env.HOUSEDIY_DATA_DIR || process.env.MYHOUSE_DATA_DIR,
   }),
 );
-if (process.env.HOUSEDIY_QA_PORT && process.env.HOUSEDIY_DATA_DIR) {
+const qaEnabled = process.env.HOUSEDIY_QA_PORT && process.env.HOUSEDIY_DATA_DIR;
+const qaCapture = qaEnabled && process.env.HOUSEDIY_QA_HIDDEN === "1";
+if (qaEnabled) {
   app.commandLine.appendSwitch(
     "remote-debugging-port",
     process.env.HOUSEDIY_QA_PORT,
@@ -89,7 +91,8 @@ if (!locked) {
           nodeIntegration: false,
           sandbox: true,
           spellcheck: false,
-          backgroundThrottling: !process.env.HOUSEDIY_QA_HIDDEN,
+          backgroundThrottling: !qaCapture,
+          additionalArguments: qaCapture ? ["--housediy-qa-capture"] : [],
         },
       });
       Menu.setApplicationMenu(
@@ -133,6 +136,26 @@ if (!locked) {
       window.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
       );
+      // Hidden windows cannot use DevTools screenshots. Capture only the
+      // isolated QA window and leave the Node inspector fuse disabled.
+      if (qaCapture) {
+        ipcMain.handle("qa-capture-page", async (event) => {
+          const contents = window.webContents;
+          if (
+            event.sender !== contents ||
+            event.senderFrame !== contents.mainFrame
+          )
+            throw new Error("无效请求");
+          const options = { stayHidden: true, stayAwake: true };
+          await contents.capturePage(undefined, options);
+          await contents.executeJavaScript(
+            "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+          );
+          return (await contents.capturePage(undefined, options))
+            .toPNG()
+            .toString("base64");
+        });
+      }
       ipcMain.handle("export-plan", async (event, { name, text }) => {
         if (
           event.sender !== window.webContents ||

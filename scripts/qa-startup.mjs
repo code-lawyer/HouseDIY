@@ -75,7 +75,14 @@ let page;
 let child;
 let log;
 let localVision;
-const capture = (name) => page.screenshot({ path: join(directory, name) });
+async function capture(name) {
+  const png = Buffer.from(
+    await page.evaluate(() => window.qaCapturePage()),
+    "base64",
+  );
+  assert.ok(png.length > 1000, "The native capture contains a rendered image");
+  writeFileSync(join(directory, name), png);
+}
 try {
   log = openSync(join(directory, "app.log"), "w");
   child = spawn(executable, [], {

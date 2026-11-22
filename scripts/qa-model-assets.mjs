@@ -38,16 +38,6 @@ try {
   });
   const page = await browser.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.setRequestInterception(true);
-  page.on("request", (request) =>
-    request.url().endsWith("/api/codex/status")
-      ? request.respond({
-          status: 200,
-          contentType: "application/json",
-          body: '{"available":false,"message":"离线验收"}',
-        })
-      : request.continue(),
-  );
   const appData = () => app.store.get(app.store.list()[0].id);
   const ready = () =>
     page.waitForFunction(
@@ -208,6 +198,12 @@ try {
   await editor.click("[aria-controls=atelier-advanced]");
   await editor.click("#exportMenu > button");
   await editor.click('button[data-exp="share"]');
+  await editor.waitForSelector(".modal [data-ok]");
+  const packageContents = await editor.$eval(".modal", (el) => el.textContent);
+  assert.match(packageContents, /描图底图/);
+  assert.match(packageContents, /blue-tetrahedron/);
+  assert.doesNotMatch(packageContents, /不属于当前设计的合成造型/);
+  await editor.click(".modal [data-ok]");
   let sharedName;
   for (let i = 0; i < 120 && !sharedName; i++) {
     sharedName = readdirSync(downloads).find((name) => name.endsWith(".html"));

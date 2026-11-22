@@ -61,7 +61,8 @@ jobs:
           if (
             $proof.sha256 -ne $sha -or $proof.executable -ne $asset -or
             $proof.sourceCommit -ne $env:GITHUB_SHA -or $proof.version -ne $version -or
-            $proof.error -or $proof.skipped.Count -gt 0
+            $proof.error -or $proof.skipped.Count -gt 0 -or $proof.errors.Count -gt 0 -or
+            $proof.networkErrors.Count -gt 0 -or $proof.checks.Count -eq 0
           ) {
             throw "The release file does not match the verified executable"
           }
