@@ -454,6 +454,36 @@ try {
     return canvas.toDataURL("image/png").split(",")[1];
   });
   writeFileSync(imageFile, Buffer.from(png, "base64"));
+  // DevTools sometimes reports a finite SSE request as aborted. Independently
+  // read its entire body, then bind the terminal result to the opened project.
+  await page.evaluate(() => {
+    const fetchOriginal = window.fetch;
+    window.fetch = async function (resource, init) {
+      const response = await fetchOriginal.call(this, resource, init);
+      if (resource === "/api/generate")
+        window.__qaGenerationBody = response.clone().text();
+      return response;
+    };
+  });
+  const completedGenerations = new Map();
+  const generationResponse = () =>
+    page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/generate",
+    );
+  async function verifyGeneration(response, editor) {
+    assert.equal(response.status(), 200);
+    const terminal = (await page.evaluate(() => window.__qaGenerationBody))
+      .split("\n\n")
+      .filter((event) => event.startsWith("data: "))
+      .map((event) => JSON.parse(event.slice(6)))
+      .at(-1);
+    assert.equal(terminal.type, "result");
+    assert.equal(
+      terminal.projectId,
+      await editor.evaluate(() => window.__HOUSEDIY__.projectId),
+    );
+    completedGenerations.set(response.request(), terminal);
+  }
   async function uploadRecoveryImage(action = "#generate-button") {
     await goHome();
     await page.waitForSelector("#new-project", { visible: true });
@@ -461,9 +491,12 @@ try {
     await (await page.$("#floorplan-file")).uploadFile(imageFile);
     await page.waitForSelector("#image-preview", { visible: true });
     await page.select("#scheme-count", "1");
+    const generated = generationResponse();
     await page.click(action);
     await waitEditor();
-    return (await page.$("#designer")).contentFrame();
+    const editor = await (await page.$("#designer")).contentFrame();
+    await verifyGeneration(await generated, editor);
+    return editor;
   }
   const partial = structuredClone(recognition);
   partial.openings.push({
@@ -527,26 +560,7 @@ try {
     ["2d", true, 0],
   );
   const imageId = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
-  // Capture the finite event stream of this one retry independently of the renderer.
-  await page.evaluate((id) => {
-    const fetchOriginal = window.fetch;
-    window.fetch = async function (resource, init) {
-      const response = await fetchOriginal.call(this, resource, init);
-      if (
-        resource === "/api/generate" &&
-        JSON.parse(init.body).projectId === id
-      ) {
-        window.fetch = fetchOriginal;
-        window.__retryBody = response.clone().text();
-      }
-      return response;
-    };
-  }, imageId);
-  const retryResponse = page.waitForResponse(
-    (r) =>
-      r.url().endsWith("/api/generate") &&
-      JSON.parse(r.request().postData() || "{}").projectId === imageId,
-  );
+  const retryResponse = generationResponse();
   await page.click("#retry-source");
   await page.waitForFunction(
     () =>
@@ -563,13 +577,7 @@ try {
     ]),
     [imageId, "3d", 4],
   );
-  const terminal = (await page.evaluate(() => window.__retryBody))
-    .split("\n\n")
-    .filter((s) => s.startsWith("data: "))
-    .map((s) => JSON.parse(s.slice(6)))
-    .at(-1);
-  assert.equal(terminal.type, "result");
-  assert.equal(terminal.projectId, imageId);
+  await verifyGeneration(await retryResponse, frame);
   assert.match(
     await page.$eval("#toast", (e) => e.textContent),
     /设计方案已生成/,
@@ -581,8 +589,6 @@ try {
     imageId,
   );
   assert.equal(persistedWallCount, 4);
-  const confirmedResponse = await retryResponse;
-  assert.equal(confirmedResponse.status(), 200);
   pass(
     "The packaged app preserves an unrecognized image as a traceable 2D project and regenerates 3D under the same project ID",
   );
@@ -877,18 +883,13 @@ try {
   assert.deepEqual(results.errors, []);
   for (const request of failedRequests) {
     const error = request.failure()?.errorText;
-    // Electron DevTools can report ERR_ABORTED after this finite SSE stream has
-    // delivered its terminal result. Keep that observation in the QA record.
-    if (
-      request === confirmedResponse.request() &&
-      error === "net::ERR_ABORTED"
-    ) {
-      results.completedRetryTransport = {
-        status: confirmedResponse.status(),
-        terminal,
-        persistedWallCount,
+    const completed = completedGenerations.get(request);
+    if (completed && error === "net::ERR_ABORTED") {
+      (results.completedGenerationTransport ??= []).push({
+        projectId: completed.projectId,
+        draftStatus: completed.draftStatus,
         devTools: error,
-      };
+      });
     } else
       results.networkErrors.push({
         path: new URL(request.url()).pathname,
