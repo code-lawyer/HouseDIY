@@ -105,11 +105,23 @@ adapt(
   '}),n={plan:Ca(),from:v1()||"",time:Date.now(),models:e,underlays:lI(),fmLib:Lh()},i=JSON.stringify(n)',
   '});const underlays=lI().map((u,i)=>u?.src==="preset"?{...u,src:eh(i)?.src}:u);const contents=["当前方案和批注"];if(underlays.some(u=>u?.src))contents.push("描图底图");if(e.length)contents.push("自定义模型（"+e.map(r=>r.name).join("、")+"）");if(!await wo("导出离线分享文件","文件包含"+contents.join("、")+"。","导出"))return;const n={plan:Ca(),from:v1()||"",time:Date.now(),models:e,underlays},i=JSON.stringify(n)',
 );
-// Recovery tools go straight to the drawing. The normal view buttons keep
-// upstream transitions; a backgrounded 3D frame cannot block opening repair.
+// Drawing tools can complete without WebGL animation frames. Cancel the old
+// camera move and its timers before leaving the scene to prevent late updates.
 adapt(
   "async function Aa(t){if(t===k.view||k.transitioning)return;",
-  'async function Aa(t,immediate=false){if(immediate&&t==="2d"){if(k.view===t)return;_o(!0);A2.dataset.view=t;k.view=t;k.transitioning=!1;document.querySelectorAll("#viewSeg button").forEach(n=>n.classList.toggle("on",n.dataset.view===t));Ni();Nt("view");ct();return}if(t===k.view||k.transitioning)return;',
+  'let houseViewTimer,houseFitTimer;async function Aa(t,immediate=false){if(immediate&&t==="2d"){if(k.view===t&&!k.transitioning&&!ys)return;clearTimeout(houseViewTimer);clearTimeout(houseFitTimer);_o(!0);if(ys){ys=null;zt.enabled=!he.active}A2.dataset.view=t;k.view=t;k.transitioning=!1;document.querySelectorAll("#viewSeg button").forEach(n=>n.classList.toggle("on",n.dataset.view===t));Ni();return}if(t===k.view||k.transitioning)return;',
+);
+adapt(
+  "k.view=t,setTimeout(()=>Yi(jo(),1400,()=>{k.transitioning=!1}),380)",
+  "k.view=t,houseViewTimer=setTimeout(()=>Yi(jo(),1400,()=>{k.transitioning=!1}),380)",
+);
+adapt(
+  "ct(),setTimeout(()=>{k.transitioning=!1},650)",
+  "ct(),houseViewTimer=setTimeout(()=>{k.transitioning=!1},650)",
+);
+adapt(
+  'k.view=t,setTimeout(()=>{k.transitioning=!1},700);t==="split"&&setTimeout(()=>Ni(),720)',
+  'k.view=t,houseViewTimer=setTimeout(()=>{k.transitioning=!1},700);t==="split"&&(houseFitTimer=setTimeout(()=>Ni(),720))',
 );
 // Export labels use the drawn dimension lines as the reference and show the
 // raster-derived room area as an estimate.

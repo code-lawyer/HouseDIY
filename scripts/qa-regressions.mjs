@@ -638,9 +638,17 @@ try {
   await page.click("#generate-button");
   frame = await ready();
   assert.equal(await page.$$eval("#variant-select option", (e) => e.length), 3);
+  // Exercise the drawing tool with a 3D transition that has stopped advancing.
+  await frame.evaluate(() => (window.__designer.app.transitioning = true));
   await page.click("#show-underlay");
   await frame.waitForFunction(
-    () => window.__designer.app.underlay?.visible === true,
+    () => {
+      const state = window.__designer.app;
+      return (
+        state.view === "2d" && !state.transitioning && state.underlay?.visible
+      );
+    },
+    { polling: 100 },
   );
   await frame.evaluate(() => {
     const d = window.__designer;

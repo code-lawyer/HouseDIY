@@ -149,9 +149,12 @@ window.addEventListener("DOMContentLoaded", async () => {
         } else if (action === "checks")
           result = { issues: checks(payload?.preferences) };
         else if (action === "view") {
-          await settleView();
-          await D.setView(payload);
-          await settleView();
+          if (payload === "2d") await D.setView("2d", true);
+          else {
+            await settleView();
+            await D.setView(payload);
+            await settleView();
+          }
           result = { ok: true };
         } else if (action === "sourceTool" || action === "prepareOpening") {
           await D.setView("2d", true);
@@ -280,16 +283,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         await settleView();
         D.fitOverview();
       } catch {
-        D.app.transitioning = false;
-        try {
-          await D.setView("2d");
-        } catch {
-          D.app.view = "2d";
-          D.app.transitioning = false;
-          document.getElementById("stage").dataset.view = "2d";
-          for (const b of document.querySelectorAll("#viewSeg [data-view]"))
-            b.classList.toggle("on", b.dataset.view === "2d");
-        }
+        await D.setView("2d", true);
         D.fit2D();
         D.requestDraw();
         viewWarning = "3D 视图未能打开，已保留二维编辑。可再次点击「3D」重试。";
