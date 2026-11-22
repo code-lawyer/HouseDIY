@@ -221,6 +221,12 @@ try {
       { polling: 100 },
     );
   };
+  const openTrash = async () => {
+    await page.click("#open-trash");
+    // The closed dialog can still contain the previous list. Opening follows
+    // the new catalog response and its render.
+    await page.waitForSelector("#trash-dialog[open]", { visible: true });
+  };
   await waitEditor();
   let frame = await (await page.$("#designer")).contentFrame();
   await frame.waitForFunction(
@@ -406,7 +412,7 @@ try {
       !document.querySelector("#home-view").hidden &&
       !document.querySelector("#delete-dialog").open,
   );
-  await page.click("#open-trash");
+  await openTrash();
   const row = `.trash-row[data-project-id="${projectId}"]`;
   await page.waitForSelector(row);
   await capture("recycle-bin.png");
@@ -716,7 +722,7 @@ try {
     await page.click("#confirm-delete");
     await page.waitForSelector("#delete-dialog[open]", { hidden: true });
   }
-  await page.click("#open-trash");
+  await openTrash();
   const singlePurge = trashRow(singleId) + " .trash-purge";
   await page.waitForSelector(singlePurge);
   assert.equal((await page.$$(".trash-row")).length, 4);
@@ -812,7 +818,7 @@ try {
   const uncertainFile = projectFile(uncertainId);
   assert.equal(existsSync(uncertainFile), false);
   writeFileSync(uncertainFile, "{");
-  await page.click("#open-trash");
+  await openTrash();
   await page.waitForSelector(trashRow(damagedId) + " .trash-purge");
   assert.equal(await page.$(trashRow(damagedId) + " .trash-restore"), null);
   assert.match(
