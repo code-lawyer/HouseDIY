@@ -115,9 +115,9 @@ try {
   await page.click("#settings-button");
   await page.waitForFunction(
     () =>
-      !document.querySelector("#codex-status").textContent.includes("正在检测"),
+      !document.querySelector("#agent-status").textContent.includes("正在检测"),
   );
-  await inspect("settings-codex");
+  await inspect("settings-agent");
   await page.select("#model-provider", "api");
   await inspect("settings-api");
   await page.$eval("#settings-result", (element) => {

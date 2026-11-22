@@ -1,6 +1,6 @@
 {
   "name": "housediy",
-  "version": "0.1.7-rc.2",
+  "version": "0.1.7-rc.3",
   "description": "本地户型与 AI 协同设计工作台",
   "productName": "HouseDIY",
   "author": "HouseDIY contributors",
@@ -35,6 +35,14 @@
       "THIRD_PARTY_NOTICES.md",
       "package.json"
     ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "win": {
       "target": "portable",
       "icon": "build/icon.ico",
@@ -45,7 +53,7 @@
     }
   },
   "devDependencies": {
-    "electron": "45.3.2",
+    "electron": "45.4.1",
     "electron-builder": "26.18.0",
     "prettier": "3.10.1",
     "puppeteer-core": "25.17.0"

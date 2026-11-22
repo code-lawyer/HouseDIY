@@ -2,6 +2,7 @@
 import puppeteer from "puppeteer-core";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import {
@@ -12,9 +13,10 @@ import {
   writeFileSync,
   openSync,
   closeSync,
+  createReadStream,
 } from "node:fs";
-import { resolve, join } from "node:path";
-import { captureNativeWindow } from "./electron-qa.mjs";
+import { resolve, join, basename } from "node:path";
+import { holdFileWithoutDeleteSharing } from "./electron-qa.mjs";
 import { mockProvider, recognition } from "../tests/mock-provider.mjs";
 
 const directory = resolve(process.env.HOUSEDIY_STARTUP_DIR || ".qa/packaged");
@@ -47,13 +49,13 @@ socket.listen(0, "127.0.0.1");
 await once(socket, "listening");
 const port = socket.address().port;
 await new Promise((r) => socket.close(r));
-const inspectorSocket = createServer();
-inspectorSocket.listen(0, "127.0.0.1");
-await once(inspectorSocket, "listening");
-const inspectorPort = inspectorSocket.address().port;
-await new Promise((r) => inspectorSocket.close(r));
+const digest = createHash("sha256");
+for await (const chunk of createReadStream(executable)) digest.update(chunk);
 const results = {
   version,
+  executable: basename(executable),
+  sha256: digest.digest("hex"),
+  sourceCommit: process.env.GITHUB_SHA || null,
   data,
   graphicsMode: process.env.HOUSEDIY_QA_HARDWARE_GPU
     ? "system-default"
@@ -70,15 +72,13 @@ const pass = (name) => {
 };
 let browser;
 let page;
-let debuggerSocket;
 let child;
 let log;
 let localVision;
-const capture = (name) =>
-  captureNativeWindow(debuggerSocket, join(directory, name));
+const capture = (name) => page.screenshot({ path: join(directory, name) });
 try {
   log = openSync(join(directory, "app.log"), "w");
-  child = spawn(executable, ["--inspect=" + inspectorPort], {
+  child = spawn(executable, [], {
     windowsHide: true,
     stdio: ["ignore", log, log],
     env: {
@@ -103,14 +103,6 @@ try {
     }
   }
   assert.ok(browser, "Packaged app starts");
-  const endpoints = await (
-    await fetch("http://127.0.0.1:" + inspectorPort + "/json/list")
-  ).json();
-  debuggerSocket = new WebSocket(endpoints[0].webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    debuggerSocket.onopen = resolve;
-    debuggerSocket.onerror = reject;
-  });
   const pages = await browser.pages();
   page = pages.find((p) => p.url().includes("127.0.0.1"));
   assert.ok(page, "Application opened through the local service");
@@ -399,7 +391,7 @@ try {
   const row = `.trash-row[data-project-id="${projectId}"]`;
   await page.waitForSelector(row);
   await capture("recycle-bin.png");
-  await page.click(row + " button");
+  await page.click(row + " .trash-restore");
   const card = `.project-entry[data-project-id="${projectId}"] .project-card`;
   await page.waitForSelector(card);
   const afterRestore = await readProject();
@@ -623,6 +615,246 @@ try {
   pass(
     "Two-point calibration and manual tracing in the Windows app produce a saved 3D wall without a model call",
   );
+
+  const recycleModel = readFileSync(
+    new URL("../tests/fixtures/blue-tetrahedron.glb", import.meta.url),
+  );
+  const exclusiveModel = "trash-qa-exclusive";
+  const sharedModel = "trash-qa-shared";
+  const { trashFixtures, sharedProject } = await page.evaluate(
+    async (plan, b64, exclusive, shared) => {
+      const withModels = (...ids) => ({
+        ...plan,
+        furniture: [
+          ...plan.furniture,
+          ...ids.map((id) => ({
+            id,
+            key: "model:" + id,
+            modelId: id,
+            name: id,
+            x: 2500,
+            y: 2500,
+            w: 900,
+            d: 1000,
+            h: 700,
+          })),
+        ],
+      });
+      async function createFixture(name, document = plan) {
+        const response = await fetch("/api/import", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name, plan: document }),
+        });
+        if (!response.ok)
+          throw new Error("Cannot create a recycle-bin QA fixture: " + name);
+        return (await response.json()).id;
+      }
+      const models = [exclusive, shared].map((id) => ({
+        id,
+        name: id,
+        w: 900,
+        d: 1000,
+        h: 700,
+        b64,
+      }));
+      const trashFixtures = [
+        await createFixture("回收站单项验收", {
+          plan: withModels(exclusive, shared),
+          models,
+        }),
+        await createFixture("回收站批量验收一"),
+        await createFixture("回收站批量验收二"),
+        await createFixture("回收站乱序验收"),
+      ];
+      const sharedProject = await createFixture(
+        "保留共享 GLB",
+        withModels(shared),
+      );
+      return { trashFixtures, sharedProject };
+    },
+    beforeTrash.variants[0].plan,
+    recycleModel.toString("base64"),
+    exclusiveModel,
+    sharedModel,
+  );
+  const [singleId, damagedId, lockedId, restoreId] = trashFixtures;
+  const projectFile = (id) => join(data, "workspace", "projects", id + ".json");
+  const modelFile = (id) =>
+    join(data, "workspace", "models", "model-" + id + ".json");
+  const trashRow = (id) => `.trash-row[data-project-id="${id}"]`;
+  await page.click("#home-button");
+  for (const id of trashFixtures) {
+    const button = `.project-entry[data-project-id="${id}"] .project-delete`;
+    await page.waitForSelector(button, { visible: true });
+    await page.click(button);
+    await page.click("#confirm-delete");
+    await page.waitForSelector("#delete-dialog[open]", { hidden: true });
+  }
+  await page.click("#open-trash");
+  const singlePurge = trashRow(singleId) + " .trash-purge";
+  await page.waitForSelector(singlePurge);
+  assert.equal((await page.$$(".trash-row")).length, 4);
+
+  await page.click(singlePurge);
+  await page.waitForSelector("#purge-dialog[open]");
+  assert.match(
+    await page.$eval("#purge-description", (el) => el.textContent),
+    /回收站单项验收/,
+  );
+  assert.equal(
+    await page.evaluate(() => document.activeElement.id),
+    "cancel-purge",
+  );
+  await capture("permanent-delete-confirmation.png");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("#purge-dialog[open]", { hidden: true });
+  assert.ok(existsSync(projectFile(singleId)));
+  assert.ok(existsSync(modelFile(exclusiveModel)));
+
+  const staleCatalog = await page.evaluate(async () =>
+    (await fetch("/api/trash?diagnostics=1")).json(),
+  );
+  staleCatalog.projects = staleCatalog.projects.filter(
+    ({ id }) => id !== restoreId,
+  );
+  const isTrashRefresh = (request) =>
+    new URL(request.url()).pathname === "/api/trash";
+  let holdNext = true;
+  const holdRestoreRefresh = (request) => {
+    if (holdNext && isTrashRefresh(request)) {
+      holdNext = false;
+      return;
+    }
+    return request.continue();
+  };
+  await page.setRequestInterception(true);
+  page.on("request", holdRestoreRefresh);
+  try {
+    const [olderRefresh] = await Promise.all([
+      page.waitForRequest(isTrashRefresh, { timeout: 10000 }),
+      page.click(trashRow(restoreId) + " .trash-restore"),
+    ]);
+    await page.click(singlePurge);
+    await page.click("#confirm-purge");
+    await page.waitForSelector("#purge-dialog[open]", { hidden: true });
+    await page.waitForSelector(singlePurge, { hidden: true });
+    await olderRefresh.respond({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(staleCatalog),
+    });
+    await page.waitForSelector(
+      `.project-entry[data-project-id="${restoreId}"]`,
+    );
+    assert.equal(await page.$(singlePurge), null);
+  } finally {
+    page.off("request", holdRestoreRefresh);
+    await page.setRequestInterception(false);
+  }
+  assert.equal(existsSync(projectFile(singleId)), false);
+  assert.equal((await page.$$(".trash-row")).length, 2);
+  pass(
+    "Single permanent delete defaults to Cancel and removes only the confirmed project file",
+  );
+  pass("A delayed restore refresh cannot resurrect a permanently deleted row");
+  assert.equal(existsSync(modelFile(exclusiveModel)), false);
+  const sharedBytes = JSON.parse(
+    readFileSync(modelFile(sharedModel), "utf8"),
+  ).b64;
+  assert.deepEqual(Buffer.from(sharedBytes, "base64"), recycleModel);
+  assert.ok(existsSync(projectFile(sharedProject)));
+  pass(
+    "Permanent project deletion removes its orphaned GLB and preserves the shared GLB bytes",
+  );
+
+  await page.click("#empty-trash");
+  await page.waitForSelector("#purge-dialog[open]");
+  assert.match(
+    await page.$eval("#purge-description", (el) => el.textContent),
+    /2 个项目/,
+  );
+  await capture("empty-trash-confirmation.png");
+  await page.click("#cancel-purge");
+  await page.waitForSelector("#purge-dialog[open]", { hidden: true });
+  assert.ok([damagedId, lockedId].every((id) => existsSync(projectFile(id))));
+  assert.equal((await page.$$(".trash-row")).length, 2);
+  await page.click("#close-trash");
+  const corrupt = JSON.parse(readFileSync(projectFile(damagedId), "utf8"));
+  corrupt.variants[0].plan = null;
+  writeFileSync(projectFile(damagedId), JSON.stringify(corrupt));
+  const uncertainId = "0000000000000000";
+  const uncertainFile = projectFile(uncertainId);
+  assert.equal(existsSync(uncertainFile), false);
+  writeFileSync(uncertainFile, "{");
+  await page.click("#open-trash");
+  await page.waitForSelector(trashRow(damagedId) + " .trash-purge");
+  assert.equal(await page.$(trashRow(damagedId) + " .trash-restore"), null);
+  assert.match(
+    await page.$eval(trashRow(damagedId), (el) => el.textContent),
+    /项目文件损坏/,
+  );
+  await page.waitForSelector("#trash-diagnostics:not([hidden])");
+  assert.equal(await page.$(trashRow(uncertainId)), null);
+  const originalLocked = readFileSync(projectFile(lockedId));
+  const releaseFileLock = await holdFileWithoutDeleteSharing(
+    projectFile(lockedId),
+  );
+  try {
+    await page.click("#empty-trash");
+    assert.match(
+      await page.$eval("#purge-description", (el) => el.textContent),
+      /2 个项目/,
+    );
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (r) => new URL(r.url()).pathname === "/api/trash/purge",
+      ),
+      page.click("#confirm-purge"),
+    ]);
+    assert.deepEqual(await response.json(), {
+      deletedCount: 1,
+      failedCount: 1,
+    });
+    await page.waitForSelector("#purge-dialog[open]", { hidden: true });
+    await page.waitForSelector(trashRow(damagedId), { hidden: true });
+    assert.equal(existsSync(projectFile(damagedId)), false);
+    assert.equal(readFileSync(uncertainFile, "utf8"), "{");
+    assert.deepEqual(readFileSync(projectFile(lockedId)), originalLocked);
+    assert.match(
+      await page.$eval("#trash-feedback", (el) => el.textContent),
+      /1 个项目未能删除/,
+    );
+    assert.equal((await page.$$(".trash-row")).length, 1);
+  } finally {
+    await releaseFileLock();
+  }
+  pass(
+    "Empty Trash can remove a known damaged project and preserves the unclassifiable file",
+  );
+
+  await page.click("#empty-trash");
+  assert.match(
+    await page.$eval("#purge-description", (el) => el.textContent),
+    /1 个项目/,
+  );
+  await page.click("#confirm-purge");
+  await page.waitForSelector("#purge-dialog[open]", { hidden: true });
+  await page.waitForSelector("#trash-list .empty-projects");
+  assert.match(
+    await page.$eval("#trash-list .empty-projects", (el) => el.textContent),
+    /没有可确认在回收站的项目/,
+  );
+  assert.equal(await page.$eval("#empty-trash", (el) => el.disabled), true);
+  assert.ok(
+    [singleId, damagedId, lockedId].every((id) => !existsSync(projectFile(id))),
+  );
+  assert.equal(readFileSync(uncertainFile, "utf8"), "{");
+  assert.ok(existsSync(projectFile(projectId)));
+  pass(
+    "Empty Trash reports a partial failure, retries the unlocked project and preserves active projects",
+  );
+
   assert.deepEqual(results.errors, []);
   for (const request of failedRequests) {
     const error = request.failure()?.errorText;
@@ -649,7 +881,6 @@ try {
   results.error = error.message;
   throw error;
 } finally {
-  debuggerSocket?.close();
   if (browser?.connected) {
     await page?.evaluate(() => window.desktop.closeReady()).catch(() => {});
     await browser.disconnect();

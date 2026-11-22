@@ -299,7 +299,7 @@ try {
   await page.click("#open-trash");
   await page.waitForSelector(".trash-row");
   await page.screenshot({ path: join(directory, "recycle-bin.png") });
-  await page.click(".trash-row button");
+  await page.click(".trash-restore");
   await page.waitForSelector(".project-card");
   held.release();
   await held.completed;
@@ -325,7 +325,7 @@ try {
   assert.equal(app.store.listTrash().length, 1);
   await page.click("#open-trash");
   await page.waitForSelector(".trash-row");
-  await page.click(".trash-row button");
+  await page.click(".trash-restore");
   await page.waitForSelector(".project-card");
   await page.click('[data-close="trash-dialog"]');
   await page.click(".project-card");

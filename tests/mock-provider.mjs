@@ -27,7 +27,7 @@ export const recognition = {
     furniture: [
       {
         key: "sofa",
-        at: [420, 220],
+        at: [420, 220 + 15 * i],
         rot: 90,
         w: 2200,
         d: 950,

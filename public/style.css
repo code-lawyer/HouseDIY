@@ -878,19 +878,58 @@ label small {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 8px 20px;
   border-bottom: 1px solid var(--line);
   padding: 12px 0;
 }
-.trash-row strong {
+.trash-row-info {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.trash-row strong,
+#purge-description {
   overflow-wrap: anywhere;
 }
-.trash-row button {
-  flex: none;
+.trash-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+.secondary.trash-danger {
+  color: var(--danger);
+}
+.primary.trash-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.primary.trash-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, black);
+}
+#purge-dialog .dialog-actions {
+  justify-content: space-between;
+}
+#empty-trash:disabled {
+  cursor: not-allowed;
+}
+#trash-feedback:empty {
+  margin: 0;
+}
+#trash-dialog:modal,
+#purge-dialog:modal {
+  overscroll-behavior: contain;
+}
+#trash-dialog::backdrop,
+#purge-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 #trash-list {
   max-height: 55vh;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 #delete-error {
   color: var(--danger);
@@ -920,15 +959,10 @@ label small {
   font-size: 12px;
   line-height: 1.8;
 }
-.connection-card > small {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  margin: 3px 0 12px;
-}
 .connection-actions {
   display: flex;
   gap: 9px;
+  margin-block-start: 8px;
 }
 .connection-actions button {
   padding: 7px 11px;
@@ -942,12 +976,16 @@ label small {
 .advanced-settings summary {
   cursor: pointer;
 }
-#codex-code {
-  font-size: 20px;
-  letter-spacing: 2px;
-  display: block;
-  color: var(--sage);
-  margin: 10px 0;
+.model-settings {
+  min-inline-size: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+.model-settings legend {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0;
 }
 #layout-feedback {
   padding: 9px 14px;

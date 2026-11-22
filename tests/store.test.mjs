@@ -22,9 +22,10 @@ const make = (t) => {
   store.ensureDemo();
   return store;
 };
-test("default Codex and external API configs survive switching without leaking secrets", async (t) => {
+test("per-CLI and external API settings survive switching without exposing keys", async (t) => {
   const store = make(t);
-  assert.equal(store.publicSettings().provider, "codex");
+  assert.equal(store.publicSettings().provider, "agent");
+  assert.equal(store.publicSettings().agent, "codex");
   await store.setSettings({
     provider: "api",
     baseUrl: "https://example.com/v1",
@@ -40,7 +41,18 @@ test("default Codex and external API configs survive switching without leaking s
       "test-secret-only",
     ),
   );
-  await store.setSettings({ provider: "codex" });
+  await store.setSettings({
+    provider: "agent",
+    agent: "claude",
+    agentConfig: { model: "sonnet" },
+  });
+  await store.setSettings({
+    provider: "agent",
+    agent: "gemini",
+    agentConfig: { model: "flash" },
+  });
+  assert.equal(store.publicSettings().agents.claude.model, "sonnet");
+  assert.equal(store.publicSettings().agents.gemini.model, "flash");
   assert.equal((await store.credentials()).apiKey, "");
   assert.equal(store.publicSettings().model, "custom");
   await store.setSettings({ provider: "api" });
@@ -50,6 +62,38 @@ test("default Codex and external API configs survive switching without leaking s
     baseUrl: "https://different.example/v1",
   });
   assert.equal(store.publicSettings().hasKey, false);
+});
+test("legacy Codex settings migrate and a remote HTTP API stays inactive until repaired", async (t) => {
+  const store = make(t);
+  writeFileSync(
+    join(store.directory, "settings.json"),
+    JSON.stringify({
+      provider: "codex",
+      codexPath: "C:/Program Files/Codex/codex.exe",
+      codexModel: "gpt-model",
+      codexEffort: "high",
+      baseUrl: "http://192.168.1.10/v1",
+      encryptedKey: Buffer.from("old-fixture-key").toString("base64"),
+    }),
+  );
+  const saved = store.publicSettings();
+  assert.equal(saved.provider, "agent");
+  assert.equal(saved.agent, "codex");
+  assert.deepEqual(saved.agents.codex, {
+    path: "C:/Program Files/Codex/codex.exe",
+    model: "gpt-model",
+    effort: "high",
+  });
+  assert.match(saved.apiAddressError, /HTTPS/);
+  await store.setSettings({ provider: "agent", agent: "claude" });
+  assert.equal(store.publicSettings().baseUrl, "http://192.168.1.10/v1");
+  await assert.rejects(store.setSettings({ provider: "api" }), /HTTPS/);
+  await store.setSettings({
+    provider: "api",
+    baseUrl: "http://127.0.0.1:8080/v1",
+  });
+  assert.equal(store.publicSettings().hasKey, false);
+  assert.equal((await store.credentials()).baseUrl, "http://127.0.0.1:8080/v1");
 });
 test("revision conflict preserves manual work and stores recoverable history", (t) => {
   const store = make(t),
@@ -144,11 +188,14 @@ test("overlapping settings writes follow submission order and a rejected write d
     apiKey: "synthetic",
   });
   await encryptStarted.promise;
-  const second = store.setSettings({ provider: "codex", codexModel: "second" });
+  const second = store.setSettings({
+    provider: "agent",
+    agentConfig: { model: "second" },
+  });
   release.resolve();
   await Promise.all([first, second]);
-  assert.equal(store.publicSettings().provider, "codex");
-  assert.equal(store.publicSettings().codexModel, "second");
+  assert.equal(store.publicSettings().provider, "agent");
+  assert.equal(store.publicSettings().agents.codex.model, "second");
   assert.equal(store.publicSettings().hasKey, true);
   await assert.rejects(store.setSettings({ baseUrl: "invalid" }));
   await store.setSettings({ provider: "api" });

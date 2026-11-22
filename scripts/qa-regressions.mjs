@@ -1020,7 +1020,13 @@ try {
     "Chat collapse restores keyboard focus and exposes the correct expanded state",
   );
   await page.click("#settings-button");
-  await page.select("#model-provider", "codex");
+  await page.select("#model-provider", "agent");
+  assert.deepEqual(
+    await page.$$eval("#agent-kind option", (items) =>
+      items.map((item) => item.value),
+    ),
+    ["codex", "claude", "gemini"],
+  );
   await shot("settings-codex");
   await page.select("#model-provider", "api");
   await shot("settings-api");

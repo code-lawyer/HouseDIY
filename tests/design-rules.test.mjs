@@ -428,12 +428,12 @@ test("Codex uses the same knowledge and reviews, with a correction before a prop
   const plan = empty(),
     prompts = [];
   const reply = await chat({
-    settings: { provider: "codex" },
+    settings: { provider: "agent" },
     plan,
     messages: [],
     message: "安排柜子",
     assumptions: ["排污口待实测"],
-    completeCodex: async (_settings, prompt) => {
+    completeAgent: async (_settings, prompt) => {
       prompts.push(prompt);
       return prompts.length === 1
         ? {

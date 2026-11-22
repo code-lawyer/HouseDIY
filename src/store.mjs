@@ -12,6 +12,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { defaultDesignPreferences } from "./design-rules.mjs";
+import { projectModelIds } from "./model-assets.mjs";
+import {
+  agents,
+  isAgent,
+  agentProfile,
+  apiBaseUrl,
+} from "./provider-settings.mjs";
 import {
   id,
   revision,
@@ -88,9 +95,16 @@ class ProjectFileError extends Error {
     this.status = 422;
   }
 }
-function normalizeStoredProject(p, projectId, file) {
+function projectReadError(file, error) {
+  return error instanceof ProjectFileError
+    ? error
+    : new ProjectFileError(
+        file,
+        error instanceof SyntaxError ? "不是完整的 JSON" : "暂时无法读取",
+      );
+}
+function normalizeStoredProject(p, file) {
   if (
-    p?.id !== projectId ||
     typeof p.name !== "string" ||
     (p.assumptions != null &&
       (!Array.isArray(p.assumptions) ||
@@ -179,6 +193,17 @@ function summarizeProject(p) {
     ...(!p.deletedAt ? { preview: thumbnailGeometry(p.variants[0].plan) } : {}),
   };
 }
+function summarizeDamagedTrash(p) {
+  return {
+    id: p.id,
+    name:
+      typeof p.name === "string" && p.name.trim() ? p.name : "损坏项目 " + p.id,
+    updatedAt: Number.isFinite(p.updatedAt) ? p.updatedAt : p.deletedAt,
+    deletedAt: p.deletedAt,
+    lifecycle: p.lifecycle ?? 0,
+    damaged: true,
+  };
+}
 export function createStore(directory, secretCodec) {
   const projectsDir = join(directory, "projects");
   mkdirSync(projectsDir, { recursive: true });
@@ -194,11 +219,34 @@ export function createStore(directory, secretCodec) {
     if (!projectIdPattern.test(projectId)) throw new Error("项目 ID 无效");
     return join(projectsDir, projectId + ".json");
   };
+  function readProjectRecord(projectId) {
+    const path = projectPath(projectId);
+    const file = projectId + ".json";
+    try {
+      const p = read(path);
+      if (p === undefined) return undefined;
+      if (p?.id !== projectId)
+        throw new ProjectFileError(file, "的项目 ID 与文件名不符");
+      if (
+        p.deletedAt != null &&
+        (!Number.isSafeInteger(p.deletedAt) ||
+          p.deletedAt <= 0 ||
+          !Number.isFinite(new Date(p.deletedAt).getTime()) ||
+          !Number.isSafeInteger(p.lifecycle ?? 0) ||
+          (p.lifecycle ?? 0) < 0)
+      )
+        throw new ProjectFileError(file, "的回收站状态无法确认");
+      return p;
+    } catch (error) {
+      throw projectReadError(file, error);
+    }
+  }
   // Cache only file identity and thumbnail metadata, never mutable plans, chat or history.
   const catalogIndex = new Map();
   function readProject(projectId, summaryOnly = false) {
     const path = projectPath(projectId),
       file = projectId + ".json";
+    let p;
     try {
       const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
       if (!stat) {
@@ -209,11 +257,11 @@ export function createStore(directory, secretCodec) {
       let known = catalogIndex.get(projectId);
       if (known?.stamp !== stamp) known = null;
       if (known && summaryOnly) return known.summary;
-      const p = read(path);
+      p = readProjectRecord(projectId);
       if (p === undefined) return undefined;
       // Reapply legacy defaults to each freshly decoded copy until a normal save persists them.
       if (!known?.canonical) {
-        const canonical = normalizeStoredProject(p, projectId, file);
+        const canonical = normalizeStoredProject(p, file);
         if (!known) {
           known = { stamp, canonical, summary: summarizeProject(p) };
           catalogIndex.set(projectId, known);
@@ -221,21 +269,20 @@ export function createStore(directory, secretCodec) {
       }
       return summaryOnly ? known.summary : p;
     } catch (error) {
-      if (error instanceof ProjectFileError) throw error;
-      throw new ProjectFileError(
-        file,
-        error instanceof SyntaxError ? "不是完整的 JSON" : "暂时无法读取",
-      );
+      const issue = projectReadError(file, error);
+      if (p?.deletedAt) issue.trashEntry = summarizeDamagedTrash(p);
+      throw issue;
     }
   }
   const settingsPath = join(directory, "settings.json");
   const initializedPath = join(directory, "workspace-initialized.json");
   let settingsWrites = Promise.resolve();
   const defaults = {
-    provider: "codex",
-    codexPath: "",
-    codexModel: "",
-    codexEffort: "medium",
+    provider: "agent",
+    agent: "codex",
+    agents: Object.fromEntries(
+      Object.keys(agents).map((kind) => [kind, agentProfile()]),
+    ),
     baseUrl: "https://api.openai.com/v1",
     model: "",
     visionModel: "",
@@ -258,10 +305,32 @@ export function createStore(directory, secretCodec) {
           "settings.json 已损坏。请重新填写模型配置并保存，原文件将备份到 workspace 下的 settings-unreadable-*.bak。",
       };
     }
+    if (!saved) return defaults;
+    const legacyCodex = {
+      path: saved.codexPath,
+      model: saved.codexModel,
+      effort: saved.codexEffort,
+    };
     return {
-      ...defaults,
-      ...saved,
-      ...(saved && !saved.provider ? { provider: "api" } : {}),
+      provider: saved.provider === "api" || !saved.provider ? "api" : "agent",
+      agent: isAgent(saved.agent) ? saved.agent : "codex",
+      agents: {
+        codex: agentProfile(saved.agents?.codex ?? legacyCodex),
+        claude: agentProfile(saved.agents?.claude),
+        gemini: agentProfile(saved.agents?.gemini),
+      },
+      baseUrl:
+        typeof saved.baseUrl === "string" ? saved.baseUrl : defaults.baseUrl,
+      model: typeof saved.model === "string" ? saved.model : defaults.model,
+      visionModel:
+        typeof saved.visionModel === "string"
+          ? saved.visionModel
+          : defaults.visionModel,
+      maxTokens: Number.isFinite(saved.maxTokens)
+        ? saved.maxTokens
+        : defaults.maxTokens,
+      encryptedKey:
+        typeof saved.encryptedKey === "string" ? saved.encryptedKey : undefined,
     };
   };
   function catalog(deleted = false, withPreviews = false) {
@@ -283,7 +352,8 @@ export function createStore(directory, secretCodec) {
         projects.push(structuredClone(summary));
       } catch (error) {
         if (!(error instanceof ProjectFileError)) throw error;
-        unreadable.push({ file, reason: error.reason });
+        if (!error.trashEntry) unreadable.push({ file, reason: error.reason });
+        else if (deleted) projects.push(error.trashEntry);
       }
     }
     projects.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -316,13 +386,18 @@ export function createStore(directory, secretCodec) {
     return p;
   };
   const save = (p) => {
-    if (existsSync(projectPath(p.id))) {
-      const existing = get(p.id);
-      if (existing.lifecycle !== (p.lifecycle ?? 0))
-        throw new Conflict("项目已经删除或恢复，请重新打开后操作");
-    }
+    const existing = get(p.id);
+    if (existing.lifecycle !== (p.lifecycle ?? 0))
+      throw new Conflict("项目已经删除或恢复，请重新打开后操作");
     p.updatedAt = Date.now();
     atomic(projectPath(p.id), p);
+    return p;
+  };
+  const requireTrashed = (p, lifecycle) => {
+    if (!p?.deletedAt)
+      throw new Conflict("该项目已恢复或不在回收站，请刷新列表");
+    if ((p.lifecycle ?? 0) !== lifecycle)
+      throw new Conflict("回收站状态已变化，请刷新列表");
     return p;
   };
   const makeVariant = ({ name, description = "", plan }) => {
@@ -360,15 +435,62 @@ export function createStore(directory, secretCodec) {
       return list(true);
     },
     restore(projectId, lifecycle) {
-      const p = readProject(projectId);
-      if (!p?.deletedAt)
-        throw new Conflict("该项目已恢复或不在回收站，请刷新列表");
-      if (p.lifecycle !== lifecycle)
-        throw new Conflict("回收站状态已变化，请刷新列表");
+      const p = requireTrashed(readProject(projectId), lifecycle);
       delete p.deletedAt;
-      p.lifecycle++;
+      p.lifecycle = lifecycle + 1;
       atomic(projectPath(projectId), p);
       return get(projectId);
+    },
+    purgeTrash(projects) {
+      if (!Array.isArray(projects) || !projects.length)
+        throw new Error("待永久删除的项目列表无效");
+      const targets = new Map();
+      for (const project of projects) {
+        const { id, lifecycle } = project ?? {};
+        if (
+          typeof id !== "string" ||
+          !Number.isSafeInteger(lifecycle) ||
+          lifecycle < 0 ||
+          targets.has(id)
+        )
+          throw new Error("待永久删除的项目列表无效");
+        const p = requireTrashed(readProjectRecord(id), lifecycle);
+        targets.set(id, projectModelIds(p));
+      }
+
+      let deletedCount = 0;
+      const modelIds = new Set();
+      for (const [id, candidates] of targets) {
+        try {
+          rmSync(projectPath(id), { force: true });
+        } catch {
+          continue;
+        }
+        catalogIndex.delete(id);
+        for (const candidate of candidates ?? []) modelIds.add(candidate);
+        deletedCount++;
+      }
+      return {
+        deletedCount,
+        failedCount: targets.size - deletedCount,
+        modelIds,
+      };
+    },
+    referencedModels() {
+      const refs = new Set();
+      try {
+        for (const file of readdirSync(projectsDir)) {
+          if (!file.endsWith(".json")) continue;
+          const p = readProjectRecord(file.slice(0, -5));
+          const modelIds = p && projectModelIds(p);
+          if (!modelIds) return null;
+          for (const id of modelIds) refs.add(id);
+        }
+      } catch {
+        // A surviving record that cannot be read may still reference any candidate.
+        return null;
+      }
+      return refs;
     },
     setDesignPreferences(projectId, body) {
       const p = this.assertLifecycle(projectId, body.lifecycle);
@@ -381,8 +503,15 @@ export function createStore(directory, secretCodec) {
     },
     publicSettings() {
       const { encryptedKey, ...s } = settings();
+      let apiAddressError = "";
+      try {
+        apiBaseUrl(s.baseUrl);
+      } catch (error) {
+        apiAddressError = error.message;
+      }
       return {
         ...s,
+        apiAddressError,
         hasKey: !!encryptedKey,
         credentialError:
           encryptedKey && !secretCodec ? "当前系统无法读取保存的密钥" : "",
@@ -391,6 +520,7 @@ export function createStore(directory, secretCodec) {
     async credentials() {
       const s = settings();
       if (s.settingsError) throw new Error(s.settingsError);
+      if (s.provider === "api") s.baseUrl = apiBaseUrl(s.baseUrl);
       let apiKey = "";
       if (s.provider === "api" && s.encryptedKey) {
         try {
@@ -408,39 +538,22 @@ export function createStore(directory, secretCodec) {
     setSettings(body) {
       const write = async () => {
         const prior = settings();
-        let url;
-        try {
-          url = new URL(string(body.baseUrl ?? prior.baseUrl, "API 地址", 600));
-        } catch {
-          throw new Error("请输入完整的 API 地址，例如 https://服务地址/v1");
-        }
-        if (
-          !["http:", "https:"].includes(url.protocol) ||
-          url.username ||
-          url.password ||
-          url.search ||
-          url.hash
-        )
-          throw new Error(
-            "API 地址必须是 HTTP(S)，不能包含账号、查询参数或片段",
-          );
-        const baseUrl = url.href
-          .replace(/\/$/, "")
-          .replace(/\/chat\/completions$/, "");
+        const provider = body.provider ?? prior.provider,
+          agent = body.agent ?? prior.agent;
+        if (!["agent", "api"].includes(provider) || !isAgent(agent))
+          throw new Error("请选择支持的模型连接方式");
+        const baseUrl =
+          provider === "api" || body.baseUrl != null
+            ? apiBaseUrl(body.baseUrl ?? prior.baseUrl)
+            : prior.baseUrl;
         const next = {
           baseUrl,
-          provider: body.provider === "api" ? "api" : "codex",
-          codexPath:
-            typeof body.codexPath === "string"
-              ? body.codexPath.trim().slice(0, 1000)
-              : prior.codexPath,
-          codexModel:
-            typeof body.codexModel === "string"
-              ? body.codexModel.trim().slice(0, 150)
-              : prior.codexModel,
-          codexEffort: ["low", "medium", "high"].includes(body.codexEffort)
-            ? body.codexEffort
-            : prior.codexEffort,
+          provider,
+          agent,
+          agents: {
+            ...prior.agents,
+            [agent]: agentProfile(body.agentConfig, prior.agents[agent]),
+          },
           model:
             typeof body.model === "string"
               ? body.model.trim().slice(0, 150)
@@ -501,7 +614,10 @@ export function createStore(directory, secretCodec) {
           .slice(0, 30),
         variants: variants.map(makeVariant),
       };
-      return save(p);
+      const path = projectPath(p.id);
+      if (existsSync(path)) throw new Conflict("项目 ID 已存在，请重试");
+      atomic(path, p);
+      return p;
     },
     createImageDraft(image, options) {
       const name = options.name || "户型底图";

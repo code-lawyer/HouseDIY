@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7-rc.3 — 2026-11-22 (Windows prerelease)
+
+- Connect through an existing local Codex, Claude Code or Gemini CLI login, or use an OpenAI-compatible API. Remote API URLs require HTTPS. Loopback HTTP remains available.
+- Preserve the imported floor-plan file locally and let the user download it. Recognition receives a resized copy.
+- Keep the first usable walls, openings and scale when retrying furniture layouts. Mark doors and windows whose detected wall is too far away. Count physically distinct furnished layouts.
+- Keep wall protection and notices in standalone HTML and limit it to assets used by the shared plan. Store reusable shapes in the workspace.
+- Present the PDF drawing as a draft, label room area as approximate and use the dimension lines for measured lengths.
+- Add confirmed permanent deletion and empty-trash actions. Preserve shared GLB files and report incomplete project deletions.
+- Update Electron, remove privileged debugging features from the portable build and attach the tested EXE hash to Windows CI.
+
 ## 0.1.7-rc.2 — 2026-11-21 (Windows prerelease)
 
 - Save the imported reference image before recognition. The same project opens for tracing or another recognition attempt when the provider stops or returns no usable walls.

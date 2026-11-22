@@ -15,9 +15,7 @@ let current = null,
   imageSelection = 0,
   selectedFurniture = null,
   pending = null,
-  requestSequence = 0,
-  loginController = null,
-  loginUrl = "";
+  requestSequence = 0;
 const requests = new Map();
 async function api(path, body) {
   if (
@@ -298,6 +296,10 @@ function needsRecognitionCopy(session) {
 }
 function showImageRecovery(session) {
   const source = session.project.imageImport;
+  const original = $("download-original");
+  original.hidden = !session.project.image?.originalAvailable;
+  if (!original.hidden)
+    original.href = `/api/projects/${session.project.id}/source`;
   $("trace-source").hidden = !source;
   if (source) {
     $("source-reason").textContent = source.reason
@@ -640,45 +642,137 @@ $("confirm-delete").onclick = async () => {
 $("delete-dialog").addEventListener("cancel", (event) => {
   if ($("confirm-delete").disabled) event.preventDefault();
 });
+const purgeDialog = $("purge-dialog"),
+  confirmPurge = $("confirm-purge"),
+  cancelPurge = $("cancel-purge");
+let trashRefresh = 0;
+function askPurge(projects, clear = false) {
+  $("purge-title").textContent = clear ? "清空回收站" : "永久删除项目";
+  $("purge-description").textContent = clear
+    ? `永久删除回收站里的 ${projects.length} 个项目？`
+    : `永久删除“${projects[0].name}”？`;
+  confirmPurge.textContent = clear ? "清空回收站" : "永久删除";
+  confirmPurge.onclick = () => purgeProjects(projects);
+  purgeDialog.showModal();
+}
+purgeDialog.addEventListener("cancel", (event) => {
+  if (confirmPurge.disabled) event.preventDefault();
+});
+
+async function purgeProjects(projects) {
+  confirmPurge.disabled = true;
+  cancelPurge.disabled = true;
+  purgeDialog.setAttribute("closedby", "none");
+  confirmPurge.textContent = "正在永久删除…";
+
+  let message;
+  let failed = false;
+  try {
+    const { deletedCount, failedCount, cleanupDeferred, cleanupQueueError } =
+      await api("/api/trash/purge", {
+        projects: projects.map(({ id, lifecycle }) => ({ id, lifecycle })),
+      });
+    message = deletedCount ? `已永久删除 ${deletedCount} 个项目。` : "";
+    if (failedCount) {
+      failed = true;
+      message += `${failedCount} 个项目未能删除，请重试。`;
+    }
+    if (cleanupDeferred)
+      message += `${cleanupDeferred} 个附件将在下次启动时重新检查。`;
+    if (cleanupQueueError)
+      message += "无法更新附件清理记录，请检查工作区的写入权限。";
+  } catch (error) {
+    failed = true;
+    message = error.message;
+  }
+  try {
+    await renderTrash();
+  } catch {
+    failed = true;
+    message += " 无法刷新回收站，请重新打开回收站。";
+  } finally {
+    confirmPurge.disabled = false;
+    cancelPurge.disabled = false;
+    purgeDialog.removeAttribute("closedby");
+    purgeDialog.close();
+  }
+  const feedback = $("trash-feedback");
+  feedback.classList.toggle("error", failed);
+  feedback.textContent = message;
+  if (!document.activeElement?.closest("#trash-dialog"))
+    $("close-trash").focus();
+}
+
 async function renderTrash() {
-  const { projects, unreadable } = await api("/api/trash?diagnostics=1");
+  const refresh = ++trashRefresh;
+  let catalog;
+  try {
+    catalog = await api("/api/trash?diagnostics=1");
+  } catch (error) {
+    if (refresh === trashRefresh) throw error;
+    return false;
+  }
+  if (refresh !== trashRefresh) return false;
+  const { projects, unreadable } = catalog;
   showUnreadable($("trash-diagnostics"), unreadable);
+  const clear = $("empty-trash");
+  clear.disabled = !projects.length;
+  clear.onclick = () => askPurge(projects, true);
   $("trash-list").replaceChildren();
   if (!projects.length)
-    $("trash-list").append(make("p", "empty-projects", "回收站是空的。"));
+    $("trash-list").append(
+      make(
+        "p",
+        "empty-projects",
+        unreadable.length ? "没有可确认在回收站的项目。" : "回收站是空的。",
+      ),
+    );
   for (const p of projects) {
     const row = make("div", "trash-row"),
-      info = make("div"),
-      restore = make("button", "secondary", "恢复项目");
+      info = make("div", "trash-row-info"),
+      actions = make("div", "trash-row-actions"),
+      purge = make("button", "secondary trash-danger trash-purge", "永久删除");
     row.dataset.projectId = p.id;
+    const summary = p.damaged ? "项目文件损坏" : `${p.variantCount} 套方案`;
     info.append(
       make("strong", "", p.name),
       make(
         "p",
         "hint",
-        `${p.variantCount} 套方案 · ${new Date(p.deletedAt).toLocaleDateString("zh-CN")}`,
+        `${summary} · ${new Date(p.deletedAt).toLocaleDateString("zh-CN")}`,
       ),
     );
-    restore.onclick = async () => {
-      restore.disabled = true;
-      try {
-        await api(`/api/projects/${p.id}/restore`, { lifecycle: p.lifecycle });
-        await renderTrash();
-        await renderProjects();
-        toast(`已恢复“${p.name}”`);
-      } catch (error) {
-        restore.disabled = false;
-        toast(error.message);
-      }
-    };
-    row.append(info, restore);
+    purge.setAttribute("aria-label", `永久删除 ${p.name}`);
+    purge.onclick = () => askPurge([p]);
+    if (!p.damaged) {
+      const restore = make("button", "secondary trash-restore", "恢复项目");
+      restore.setAttribute("aria-label", `恢复项目 ${p.name}`);
+      restore.onclick = async () => {
+        restore.disabled = true;
+        try {
+          await api(`/api/projects/${p.id}/restore`, {
+            lifecycle: p.lifecycle,
+          });
+          await renderTrash();
+          await renderProjects();
+          toast(`已恢复“${p.name}”`);
+        } catch (error) {
+          restore.disabled = false;
+          toast(error.message);
+        }
+      };
+      actions.append(restore);
+    }
+    actions.append(purge);
+    row.append(info, actions);
     $("trash-list").append(row);
   }
+  return true;
 }
 $("open-trash").onclick = async () => {
   try {
-    await renderTrash();
-    $("trash-dialog").showModal();
+    $("trash-feedback").textContent = "";
+    if (await renderTrash()) $("trash-dialog").showModal();
   } catch (error) {
     toast(error.message);
   }
@@ -914,7 +1008,7 @@ $("chat-form").addEventListener("submit", async (event) => {
   if (controller || workspaceLocked || !current?.ready) return;
   const message = $("chat-input").value.trim();
   if (!message) return;
-  if (settings?.provider !== "codex" && !settings?.model) {
+  if (settings?.provider === "api" && !settings.model) {
     openSettings();
     toast("先配置聊天模型，就可以在这里直接调整方案。");
     return;
@@ -1161,27 +1255,68 @@ $("close-chat").onclick = () => {
   setChatVisible(false);
   $("toggle-chat").focus();
 };
-async function loadSettings() {
-  settings = await api("/api/settings");
+const agentHints = {
+  codex: "安装官方 Codex CLI，先在终端运行 codex login。",
+  claude: "安装官方 Claude Code CLI，先在终端运行 claude auth login。",
+  gemini: "安装新版 Gemini CLI，在终端运行 gemini 并完成 Google 登录。",
+};
+let agentDrafts = {},
+  displayedAgent,
+  detection = 0,
+  settingsSaving = false;
+function updateModelIndicator() {
   $("model-dot").classList.toggle(
     "ready",
-    settings.provider === "api" && !!settings.model,
+    settings?.provider === "api" &&
+      !!settings.model &&
+      !settings.apiAddressError,
   );
-  if (settings.provider === "codex" && !settings.settingsError)
-    refreshCodex().catch(() => {});
+}
+async function loadSettings() {
+  settings = await api("/api/settings");
+  updateModelIndicator();
+}
+function settingsResult(message = "", error = false) {
+  $("settings-result").textContent = message;
+  $("settings-result").classList.toggle("error", error);
 }
 function providerFields() {
   const isApi = $("model-provider").value === "api";
-  $("api-settings").hidden = !isApi;
-  $("codex-settings").hidden = isApi;
-  $("base-url").required = isApi;
-  $("chat-model").required = isApi;
+  $("api-settings").disabled = $("api-settings").hidden = !isApi;
+  $("agent-settings").disabled = $("agent-settings").hidden = isApi;
+  $("base-url").required = $("chat-model").required = isApi;
+  $("test-model").hidden = !isApi;
+  const warning =
+    settings?.settingsError ||
+    (isApi && (settings?.apiAddressError || settings?.credentialError)) ||
+    "";
+  settingsResult(warning, !!warning);
+}
+function cliFields() {
+  return {
+    path: $("agent-path").value,
+    model: $("agent-model").value,
+    effort: $("agent-effort").value,
+  };
+}
+function showAgent(kind) {
+  detection++;
+  displayedAgent = kind;
+  const profile = agentDrafts[kind] || {};
+  $("agent-path").value = profile.path || "";
+  $("agent-model").value = profile.model || "";
+  $("agent-effort").value = profile.effort || "medium";
+  $("agent-effort-field").hidden = $("agent-effort").disabled =
+    kind !== "codex";
+  $("agent-install-hint").textContent = agentHints[kind];
+  $("agent-status").textContent = "等待检测本机 CLI";
+  $("agent-detect").disabled = false;
 }
 function openSettings() {
-  $("model-provider").value = settings?.provider || "codex";
-  $("codex-model").value = settings?.codexModel || "";
-  $("codex-path").value = settings?.codexPath || "";
-  $("codex-effort").value = settings?.codexEffort || "medium";
+  $("model-provider").value = settings?.provider || "agent";
+  $("agent-kind").value = settings?.agent || "codex";
+  agentDrafts = { ...settings?.agents };
+  showAgent($("agent-kind").value);
   $("base-url").value = settings?.baseUrl || "https://api.openai.com/v1";
   $("chat-model").value = settings?.model || "";
   $("vision-model").value = settings?.visionModel || "";
@@ -1190,117 +1325,95 @@ function openSettings() {
   $("api-key").placeholder = settings?.hasKey
     ? "已有加密密钥；留空保留，输入可替换"
     : "输入 API 密钥；无密钥服务可留空";
-  const warning = settings?.settingsError || settings?.credentialError || "";
-  $("settings-result").textContent = warning;
-  $("settings-result").classList.toggle("error", !!warning);
   providerFields();
   $("settings-dialog").showModal();
-  refreshCodex().catch((e) => {
-    $("codex-status").textContent = e.message;
-  });
 }
 $("settings-button").onclick = openSettings;
 $("model-provider").onchange = providerFields;
-async function refreshCodex() {
-  const status = await api("/api/codex/status");
-  $("codex-status").textContent = status.message;
-  $("codex-detail").textContent = status.available
-    ? [status.version, status.account].filter(Boolean).join(" · ")
-    : "可以指定本机程序路径，或切换到自定义 LLM API。";
-  if (settings?.provider === "codex")
-    $("model-dot").classList.toggle("ready", status.loggedIn);
-  return status;
-}
-$("codex-refresh").onclick = async () => {
-  try {
-    settings = await api("/api/settings", settingsBody());
-    await refreshCodex();
-  } catch (e) {
-    $("codex-status").textContent = e.message;
-  }
+$("agent-kind").onchange = () => {
+  agentDrafts[displayedAgent] = cliFields();
+  showAgent($("agent-kind").value);
 };
-$("codex-login").onclick = async () => {
-  if (loginController) return;
-  loginController = new AbortController();
-  $("codex-login").disabled = true;
-  $("codex-status").textContent = "正在准备登录…";
+$("agent-detect").onclick = async () => {
+  const sequence = ++detection,
+    kind = displayedAgent,
+    config = cliFields();
+  $("agent-detect").disabled = true;
+  $("agent-status").textContent = "正在检测本机 CLI…";
   try {
-    settings = await api("/api/settings", settingsBody());
-    await readStream(
-      "/api/codex/login",
-      {},
-      loginController.signal,
-      (event) => {
-        if (event.type === "login") {
-          loginUrl = event.url;
-          $("codex-code").textContent = event.code;
-          $("codex-auth").hidden = false;
-          $("codex-status").textContent = "等待你在浏览器中登录";
-        }
-      },
-    );
-    await refreshCodex();
-  } catch (e) {
-    $("codex-status").textContent =
-      e.name === "AbortError" ? "已取消登录" : e.message;
+    const status = await api("/api/agent/status", { agent: kind, config });
+    if (sequence !== detection) return;
+    $("agent-status").textContent = [status.version, status.message]
+      .filter(Boolean)
+      .join(" · ");
+    if (
+      settings?.provider === "agent" &&
+      settings.agent === kind &&
+      (settings.agents[kind]?.path || "") === config.path.trim()
+    )
+      $("model-dot").classList.toggle("ready", status.loggedIn === true);
+  } catch (error) {
+    if (sequence === detection) $("agent-status").textContent = error.message;
   } finally {
-    loginController = null;
-    $("codex-login").disabled = false;
-    $("codex-auth").hidden = true;
+    if (sequence === detection) $("agent-detect").disabled = false;
   }
 };
-$("codex-open-auth").onclick = () => {
-  if (window.desktop) desktop.openAuth(loginUrl);
-  else toast("请在浏览器打开 " + loginUrl);
-};
-$("codex-cancel-login").onclick = () => loginController?.abort();
-$("settings-dialog").addEventListener("close", () => loginController?.abort());
+$("settings-dialog").addEventListener("close", () => {
+  detection++;
+});
 $("base-url").addEventListener("input", () => {
   if ($("base-url").value.replace(/\/$/, "") !== settings?.baseUrl) {
     $("api-key").value = "";
     $("api-key").placeholder = "服务地址已改变，请重新填写该服务的密钥";
   }
 });
-const settingsBody = () => ({
-  provider: $("model-provider").value,
-  codexPath: $("codex-path").value,
-  codexModel: $("codex-model").value,
-  codexEffort: $("codex-effort").value,
-  baseUrl: $("base-url").value,
-  apiKey: $("api-key").value,
-  model: $("chat-model").value,
-  visionModel: $("vision-model").value,
-  maxTokens: Number($("max-tokens").value),
-});
-$("settings-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+function settingsBody() {
+  if ($("model-provider").value === "agent")
+    return {
+      provider: "agent",
+      agent: displayedAgent,
+      agentConfig: cliFields(),
+    };
+  return {
+    provider: "api",
+    baseUrl: $("base-url").value,
+    apiKey: $("api-key").value,
+    model: $("chat-model").value,
+    visionModel: $("vision-model").value,
+    maxTokens: Number($("max-tokens").value),
+  };
+}
+async function saveSettings(test = false) {
+  if (settingsSaving) return;
+  settingsSaving = true;
+  const payload = settingsBody();
+  $("save-settings").disabled = $("test-model").disabled = true;
+  settingsResult(test ? "正在连接模型…" : "");
   try {
-    settings = await api("/api/settings", settingsBody());
-    await loadSettings();
-    $("settings-dialog").close();
-    $("api-key").value = "";
-    toast("模型设置已保存");
+    if (test) {
+      await api("/api/settings/test", { save: payload });
+      settingsResult("连接成功。聊天模型已响应。");
+    } else {
+      settings = await api("/api/settings", payload);
+      $("settings-dialog").close();
+      toast("模型设置已保存");
+    }
   } catch (error) {
-    $("settings-result").textContent = error.message;
-    $("settings-result").classList.add("error");
-  }
-});
-$("test-model").onclick = async () => {
-  if (!$("settings-form").reportValidity()) return;
-  $("test-model").disabled = true;
-  $("settings-result").classList.remove("error");
-  $("settings-result").textContent = "正在连接模型…";
-  try {
-    const r = await api("/api/settings/test", { save: settingsBody() });
-    await loadSettings();
-    $("api-key").value = "";
-    $("settings-result").textContent = "连接成功。聊天模型已响应。";
-  } catch (e) {
-    $("settings-result").textContent = e.message;
-    $("settings-result").classList.add("error");
+    settingsResult(error.message, true);
   } finally {
-    $("test-model").disabled = false;
+    if (test) await loadSettings().catch(() => {});
+    else updateModelIndicator();
+    $("api-key").value = "";
+    $("save-settings").disabled = $("test-model").disabled = false;
+    settingsSaving = false;
   }
+}
+$("settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveSettings();
+});
+$("test-model").onclick = () => {
+  if ($("settings-form").reportValidity()) void saveSettings(true);
 };
 for (const button of document.querySelectorAll("[data-close]"))
   button.onclick = () => {
@@ -1339,12 +1452,20 @@ async function acceptImage(file) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
+  const originalDataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("无法读取户型图原文件"));
+    reader.readAsDataURL(file);
+  });
   if (selection !== imageSelection) return;
   selectedImage = {
     name: file.name.replace(/\.[^.]+$/, "").slice(0, 180),
     dataUrl: canvas.toDataURL("image/jpeg", 0.92),
     width: canvas.width,
     height: canvas.height,
+    originalDataUrl,
+    originalName: file.name,
   };
   $("image-preview").src = selectedImage.dataUrl;
   $("image-preview").hidden = false;

@@ -6,7 +6,6 @@ const {
   session,
   dialog,
   ipcMain,
-  shell,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -20,7 +19,7 @@ app.setPath(
     overrideDir: process.env.HOUSEDIY_DATA_DIR || process.env.MYHOUSE_DATA_DIR,
   }),
 );
-if (process.env.HOUSEDIY_QA_PORT) {
+if (process.env.HOUSEDIY_QA_PORT && process.env.HOUSEDIY_DATA_DIR) {
   app.commandLine.appendSwitch(
     "remote-debugging-port",
     process.env.HOUSEDIY_QA_PORT,
@@ -47,6 +46,13 @@ if (!locked) {
     .then(async () => {
       const { startServer } = await import("./server.mjs");
       const { maxPlanFileBytes } = await import("./model-assets.mjs");
+      const { cleanOldAgentRequests } = await import("./agent-process.mjs");
+      const workspace = path.join(app.getPath("userData"), "workspace");
+      try {
+        cleanOldAgentRequests(path.join(workspace, "requests"));
+      } catch {
+        // A temporarily unavailable requests folder cannot block workspace opening.
+      }
       const codec = (await safeStorage.isAsyncEncryptionAvailable())
         ? {
             encrypt: async (text) =>
@@ -60,7 +66,7 @@ if (!locked) {
           }
         : undefined;
       service = await startServer({
-        dataDir: path.join(app.getPath("userData"), "workspace"),
+        dataDir: workspace,
         secretCodec: codec,
         seedFile: process.env.HOUSEDIY_SEED,
       });
@@ -83,6 +89,7 @@ if (!locked) {
           nodeIntegration: false,
           sandbox: true,
           spellcheck: false,
+          backgroundThrottling: !process.env.HOUSEDIY_QA_HIDDEN,
         },
       });
       Menu.setApplicationMenu(
@@ -126,24 +133,6 @@ if (!locked) {
       window.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
       );
-      ipcMain.handle("open-auth", async (event, address) => {
-        if (
-          event.sender !== window.webContents ||
-          event.senderFrame !== window.webContents.mainFrame
-        )
-          throw new Error("无效请求");
-        const url = new URL(address);
-        if (
-          url.protocol !== "https:" ||
-          !["auth.openai.com", "auth.chatgpt.com", "chatgpt.com"].includes(
-            url.hostname,
-          ) ||
-          url.username ||
-          url.password
-        )
-          throw new Error("无效登录地址");
-        await shell.openExternal(url.href);
-      });
       ipcMain.handle("export-plan", async (event, { name, text }) => {
         if (
           event.sender !== window.webContents ||

@@ -56,6 +56,19 @@ try {
         document.querySelector("#editor-loading").hidden,
     );
   const frame = async () => (await page.$("#designer")).contentFrame();
+  async function repairedFrame(previousSource) {
+    await page.waitForFunction(
+      (source) =>
+        document.querySelector("#designer").src !== source &&
+        document.querySelector("#editor-view").getAttribute("aria-busy") ===
+          "false" &&
+        document.querySelector("#model-feedback").hidden &&
+        document.querySelector("#editor-loading").hidden,
+      {},
+      previousSource,
+    );
+    return frame();
+  }
   async function openProject(projectId) {
     await page.goto(app.url);
     const card = '[data-project-id="' + projectId + '"] .project-card';
@@ -137,6 +150,21 @@ try {
   assert.equal((await saved).status(), 200);
   await verifyRendered(editor, id);
   pass("import, place, render and save the original blue mesh");
+  const unrelatedShape = {
+    id: "excluded-shape",
+    name: "不属于当前设计的合成造型",
+    model: JSON.stringify({ parts: [] }),
+    w: 100,
+    d: 100,
+    h: 100,
+    color: "#eeeeee",
+  };
+  assert.ok(
+    await editor.evaluate(
+      (shape) => window.houseShapes.save([shape]),
+      unrelatedShape,
+    ),
+  );
   const oldOrigin = app.origin;
   await app.close();
   app = await startServer({ dataDir });
@@ -145,6 +173,12 @@ try {
   await verifyRendered(editor, id);
   await page.screenshot({ path: join(root, "model-reopened.png") });
   pass("fresh origin reopens the same mesh and instance");
+  assert.deepEqual(await editor.evaluate(() => window.houseShapes.items()), [
+    unrelatedShape,
+  ]);
+  pass(
+    "the reusable shape library survives a different workspace server origin",
+  );
 
   const downloads = mkdtempSync(join(root, "export-"));
   await (
@@ -180,6 +214,11 @@ try {
     if (!sharedName) await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.ok(sharedName, "The export menu produced a standalone HTML file");
+  const sharedFile = join(downloads, sharedName);
+  const exportedHtml = readFileSync(sharedFile, "utf8");
+  assert.match(exportedHtml, /Copyright .*ZWD11/i);
+  assert.match(exportedHtml, /Permission is hereby granted/);
+  assert.ok(!exportedHtml.includes(unrelatedShape.name));
   const recipient = await browser.createBrowserContext();
   try {
     const offline = await recipient.newPage();
@@ -196,9 +235,16 @@ try {
       }
       return request.continue();
     });
-    await offline.goto(pathToFileURL(join(downloads, sharedName)).href);
-    await offline.waitForSelector("#sbX", { visible: true });
-    await offline.click("#sbX");
+    await offline.goto(pathToFileURL(sharedFile).href);
+    await offline.waitForFunction(
+      (modelId) =>
+        window.__designer?.app.plan.furniture.some(
+          (item) => item.modelId === modelId,
+        ),
+      { timeout: 60000 },
+      id,
+    );
+    await offline.evaluate(() => document.querySelector("#sbX")?.click());
     await offline.click('#viewSeg [data-view="3d"]');
     await verifyRendered(offline, id);
     const shared = await offline.evaluate(() => ({
@@ -207,10 +253,17 @@ try {
         "[data-housediy-desktop],#__preset",
       ).length,
       mesh: window.__SHARED__.models[0].b64,
+      library: window.__SHARED__.fmLib,
+      unknownWall: window.__wallStructureLabel({
+        bearing: null,
+        status: "existing",
+      }),
     }));
     assert.deepEqual(shared.underlay, underlay);
     assert.equal(shared.mesh, exported.models[0].b64);
     assert.equal(shared.desktopElements, 0);
+    assert.equal(shared.library, undefined);
+    assert.equal(shared.unknownWall, "承重待核实");
     assert.deepEqual(requests, []);
   } finally {
     await recipient.close();
@@ -243,18 +296,14 @@ try {
   });
   editor = await openProject(legacy.id);
   await page.waitForSelector("#model-feedback button", { visible: true });
+  const legacySource = await page.$eval("#designer", (el) => el.src);
   const restored = page.waitForResponse(
     (r) =>
       r.url().endsWith("/api/models/" + id) && r.request().method() === "PUT",
   );
   await (await page.$("#model-feedback input")).uploadFile(fixture);
   assert.equal((await restored).status(), 200);
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#model-feedback").hidden &&
-      document.querySelector("#editor-loading").hidden,
-  );
-  editor = await frame();
+  editor = await repairedFrame(legacySource);
   await verifyRendered(editor, id);
   assert.deepEqual(
     appData().variants[0].plan.furniture.find((f) => f.modelId === id),
@@ -295,15 +344,11 @@ try {
         "false",
   );
   assert.equal(readFileSync(damagedFile, "utf8"), fragment);
+  const damagedSource = await page.$eval("#designer", (el) => el.src);
   const fixed = repairResponse();
   await (await page.$("#model-feedback input")).uploadFile(fixture);
   assert.equal((await fixed).status(), 200);
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#model-feedback").hidden &&
-      document.querySelector("#editor-loading").hidden,
-  );
-  editor = await frame();
+  editor = await repairedFrame(damagedSource);
   await verifyRendered(editor, id);
   const backups = readdirSync(modelsDir).filter((name) =>
     name.endsWith(".bak"),
