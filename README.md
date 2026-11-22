@@ -1,105 +1,73 @@
 # HouseDIY
 
-**在可编辑的 3D 空间里，和 AI 一起设计你的家。**
+HouseDIY 是面向单层住宅的 Windows 桌面设计工具。导入户型图后，可以在 2D、3D 或分屏里描墙、布置家具，也可以用 AI 生成布局，再通过对话或手动编辑调整方案。
 
-HouseDIY 是 Windows 桌面家居设计工具：导入户型图或已有方案，在同一界面中查看二维 / 三维效果、手动编辑，并通过对话逐步调整家具和空间。默认接入本机 Codex CLI，也支持自行配置 OpenAI 兼容模型 API。
+[下载 Windows x64 便携版](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.3/HouseDIY-0.1.7-rc.3-portable.exe) · [SHA-256 校验文件](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.3/HouseDIY-0.1.7-rc.3-portable.sha256) · [v0.1.7-rc.3 发布说明](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.3)
 
-[下载 Windows 预发布版](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.2) · [更新记录](CHANGELOG.md) · [问题反馈](https://github.com/code-lawyer/HouseDIY/issues) · [上游与许可](THIRD_PARTY_NOTICES.md)
+![HouseDIY v0.1.7-rc.3 中的日光客厅示例、3D 编辑区与 AI 对话侧栏](docs/images/0.1.7-rc.3-editor.png)
 
-![HouseDIY 暖居工作台，使用公开示例方案](docs/images/editor-warm.jpg)
+## 快速开始
 
-截图展示 0.1.5 的暖居界面。配色、字体和交互约定见 [设计语言](docs/design-language.md)。
+1. 下载便携 EXE 和校验文件。当前是未签名的测试版。在下载目录运行以下 PowerShell 命令，比对校验文件中的 SHA-256，确认一致后双击 EXE。
 
-## 能做什么
+   ```powershell
+   Get-FileHash -Algorithm SHA256 -LiteralPath .\HouseDIY-0.1.7-rc.3-portable.exe
+   ```
 
-- **从户型图开始**。上传 PNG、JPG 或 WebP，按左右最外墙的中线填写水平跨度，生成 1–3 套共用墙体、家具布置各异的可编辑方案。识图比例有差异时，导入结果会提示核对。
-- **保留直接编辑**：继续使用原编辑器的二维、三维、家具库、属性面板和手动调整方式。
-- **在页面里和 AI 协作**：例如「把客厅沙发改成暖米色」「再向右移动 20 厘米」「拆除选中的非承重隔墙，同时移走上面的挂画」。
-- **可控地应用修改**。家具和材质修改可直接应用，墙体、门窗操作先确认。AI 会保护承重墙、承重待核实的墙及其洞口，识别出的墙须先核实结构。过期结果会提示重新生成。
-- **项目保存在本机**。自动保存、复制方案、当前会话撤销，支持导出单层 JSON。导出的方案可携带所用自定义 GLB 的模型数据，便于搬到另一工作区继续编辑。
-- **修改先检查**。AI 先在副本中检查门型、围合空间、门口通路、高柜位置和碰撞，收到问题后修正，通过后才进入应用流程。聊天区「AI 设计范围」默认固定墙体和门窗，需要改造时可以关闭。
-- **删除与恢复项目**。项目卡片和编辑器顶部可将整个项目移入本地回收站，首页「回收站」可恢复方案、对话和历史。
+2. 打开内置的「日光客厅 · 示例」，试试切换视图、移动家具或更改材质。手动编辑和查看示例无需配置 AI。
+3. 选择「导入户型图」上传 PNG、JPG 或 WebP，也可用「导入已有方案」继续编辑单层方案 JSON。 [示例 JSON](examples/demo-plan.json)
+4. 想用 AI 识图或调整方案时，先在「模型设置」选择连接方式，再在编辑器的「一起设计」侧栏提出需求。 [配置 AI](#配置-ai)
 
-## 下载与开始使用
+## 户型设计与导出
 
-**0.1.7-rc.2 预发布版**提供 Windows x64 便携程序，无需安装开发环境。导入户型图时会先保存底图，再用有效墙线建立可编辑的 3D 草稿。待定位的门窗可手动归墙，缺少墙线时可在底图上描墙或重新识别。具体规则见[设计检查说明](docs/design-checks.md)。[v0.1.5 公开预览版](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.5)仍可下载。
+- **识图和描墙。** 导入后会保留可下载的原图。填写两侧最外墙中线的水平跨度可校准尺寸。AI 可生成 1–3 套共用墙体、家具布局各异的方案。识别中断后仍可打开底图或已生成的草稿，继续描墙、重试或手动定位门窗。
+- **手动与对话编辑。** 可以选中家具再说「把沙发换成暖米色」或「向右移动 20 厘米」。应用 AI 修改前会检查门口通行、碰撞等问题。AI 默认固定墙体与门窗。解锁后，相关修改需确认，承重墙与结构待核实的墙仍受保护。 [设计检查说明](docs/design-checks.md)
+- **保存与分享。** 项目自动保存在本机，可另存方案或撤销当前会话中的编辑。回收站支持恢复项目、永久删除单项以及清空。单层 JSON 可随附所引用的自定义 GLB，便于继续编辑。独立 HTML 可离线打开，A3 PDF 可用于沟通设计。
+- **尺寸与结构。** 识图和 PDF 图纸提供设计草稿。尺寸、门洞和承重信息需按现场测量与结构审核确认。
 
-1. 从 [v0.1.7-rc.2 Release](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.2) 下载 `HouseDIY-0.1.7-rc.2-portable.exe` 及其 `.sha256` 校验文件。程序尚未代码签名，核对 SHA-256 后双击启动。
-2. 打开内置的「日光客厅 · 示例」，或导入 [示例 JSON](examples/demo-plan.json) 熟悉操作。
-3. 在「模型设置」里选择 Codex CLI 或外部 API。
-4. 导入自己的户型图，或导入原设计器导出的单层方案 JSON；在设计区选中对象后即可描述修改需求。
+## 配置 AI
 
-`public/index.html` 是界面源文件，直接在浏览器中打开只会显示启动指引。完整功能请从桌面程序进入。
+打开「模型设置」，在以下两种连接方式中选择一种。两套设置分别保存，切换后可以继续编辑同一项目。
 
-### 使用 Codex CLI
+- **本机已登录的 Agent。** 在终端安装并登录 Codex CLI、Claude Code CLI 或 Gemini CLI，再在 HouseDIY 中选择对应的 CLI 并点击「检测 CLI」。可在「CLI 路径与安装」里填写程序路径，模型留空时使用 CLI 默认模型。服务权限和额度由各 CLI 的账号管理。 [Codex CLI](https://github.com/openai/codex) · [Claude Code CLI](https://code.claude.com/docs/en/cli-reference)
+- **外部 LLM API。** 填写 OpenAI Chat Completions 兼容地址、API 密钥和模型名称。远程服务使用 HTTPS，本机回环地址支持 HTTP。聊天模型需支持工具调用，识图需使用支持图片输入的模型。
 
-需要自行安装并登录官方 [Codex CLI](https://github.com/openai/codex)。如果已安装 Node.js，可以执行：
+Gemini CLI 入口面向符合资格的组织账号，识图依赖 CLI 的 ACP 图片能力。Claude Code 连接使用用户自行安装和登录的原版 CLI，适用 Anthropic 的接入条款。 [Gemini CLI 官方说明](https://github.com/google-gemini/gemini-cli#gemini-cli) · [Claude Code 条款](https://code.claude.com/docs/en/legal-and-compliance#can-customers-offer-claude-code-in-their-products)
 
-```sh
-npm install -g @openai/codex
-```
-
-HouseDIY 会检测本机 CLI；也可在高级设置中指定 `codex.exe`。在软件内点击「登录 Codex」完成设备登录。模型名称留空时使用 CLI 默认模型，无需另开 Codex 桌面窗口。当前集成验收使用 `codex-cli 0.153.4`；过旧版本需要更新。
-
-账号、订阅及模型额度由用户自行提供。HouseDIY 不附带 Codex 登录凭据或模型权重。
-
-### 使用其他 LLM API
-
-选择「自定义 LLM API」，填写 OpenAI Chat Completions 兼容地址、API 密钥、聊天模型和可选的看图模型。聊天模型需要支持工具调用，看图模型需要支持图片输入。两套配置独立保留，切换后可以继续编辑同一项目。
+本版的自动验收使用模拟 CLI 和模拟 API 响应。 [本版验收记录](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.3)
 
 ## 数据与隐私
 
-- 默认项目目录为 `%APPDATA%\HouseDIY\workspace`。旧 MyHouse 用户若已有项目，且新目录尚无项目，应用会沿用 `%APPDATA%\MyHouse\workspace`，保留项目与加密配置；不会自动合并两套工作区。
-- 项目、最近 30 个历史版本及对话保存在本机；界面撤销针对当前打开的编辑会话。
-- 完整备份可在关闭程序后复制整个 `workspace`，包括 `models` 中的模型原件。单方案 JSON 可带走当前布置及引用的模型，需要迁移全部方案、历史与对话时请复制整个工作区。旧项目若只剩模型编号，在编辑器按提示选回原始 GLB。
-- **AI 请求会把当前方案及相关对话，或上传的户型图，发送给你选择的模型服务。** 没有后台自动上传；模型服务自己的数据政策与额度仍适用。
-- 外部 API 密钥通过 Electron 的系统密钥存储加密，不放进导出的方案。Codex 凭据由 CLI 管理。
-- 桌面服务只监听回环地址，使用会话鉴权；模型仅返回受校验的设计操作，不执行模型生成的任意代码。
+- 默认工作区是 `%APPDATA%\HouseDIY\workspace`。若新工作区尚未初始化，程序会优先打开已有的 `%APPDATA%\MyHouse\workspace`，两套工作区各自保存。
+- 要备份全部项目、对话、历史、原图和自定义模型，退出程序后复制整个 `workspace` 目录。换电脑后按需重新配置模型连接。
+- 发起 AI 请求时，所选服务会处理当前方案及相关对话，或用于识图的缩放图。导入原文件保存在本机。API 密钥由 Windows 系统密钥存储保护，各 CLI 管理自己的登录。
 
-## 当前边界
+## 从源码运行
 
-- 这是 **0.1.x 预览版**。识图得到的是设计初稿，尺寸、门洞、承重信息需要核对，不能替代现场测量或结构审核。
-- 目前面向单层住宅和现有家具库；三维为可交互的参数化模型，不是照片级渲染。
-- 不包含 PDF 图纸解析、云端同步、多用户协作或跨重启的一键撤销。
-- 上游发布的是打包后的编辑器，未提供其构建源码和锁文件；部分内嵌依赖的精确版本仍未知。本项目保留原始许可并公开该限制，**不声称已完成上游所有内联代码的完整依赖审计**。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [依赖记录](vendor/DEPENDENCIES.json)。
-
-## 本地开发
-
-开发使用 Node.js 24；Windows 打包需要 Windows x64 环境。
+使用 Node.js 24。以下命令检出当前测试版对应的源码。Windows x64 环境可构建便携程序。
 
 ```sh
 git clone https://github.com/code-lawyer/HouseDIY.git
 cd HouseDIY
+git switch --detach v0.1.7-rc.3
 npm ci
 npm start
 ```
 
-```sh
-npm test             # 本地模拟模型与数据保存测试，不产生模型用量
-npm run check        # 代码格式检查
-npm run test:ui      # 浏览器界面回归，需要本机 Chrome / Edge
-npm run test:first-fixes # 设计纠错、删除恢复与重启的隔离界面验收
-npm run test:models  # 自定义模型重启、跨工作区导入和损坏恢复
-npm run build        # 生成 release/HouseDIY-<版本>-portable.exe
-npm run test:package # 在隔离数据目录验收真实便携包，不调用模型
-```
+| 命令                       | 用途                                   |
+| -------------------------- | -------------------------------------- |
+| `npm test`                 | 运行项目存储、设计规则与模拟模型测试   |
+| `npm run check`            | 检查代码与 README 格式                 |
+| `npm run test:ui`          | 使用本机 Chrome 或 Edge 做界面回归     |
+| `npm run test:first-fixes` | 验收设计纠错、项目删除和恢复           |
+| `npm run test:models`      | 验收自定义模型持久化及损坏恢复         |
+| `npm run build`            | 将 Windows x64 便携包输出到 `release/` |
+| `npm run test:package`     | 在隔离数据目录验收便携程序             |
 
-`npm run serve` 可启动网页开发模式；系统密钥存储和原生导出对话框需要 Electron。测试输出位于被 Git 忽略的 `.qa` 目录。`HOUSEDIY_DATA_DIR` 可指定独立桌面数据目录；`HOUSEDIY_PLAN_FIXTURE` 可指定成品验收用的方案文件。
+`npm run serve` 可启动网页开发模式。系统密钥存储和原生文件对话框在 Electron 中可用。测试输出位于 `.qa/`。
 
-## 项目结构与归属
+## 反馈与许可
 
-| 路径                               | 作用                                      |
-| ---------------------------------- | ----------------------------------------- |
-| `src/main.cjs` / `preload.cjs`     | Electron 桌面入口、受限 IPC、系统密钥存储 |
-| `src/server.mjs` / `store.mjs`     | 本地会话服务、项目、版本及保存            |
-| `src/codex.mjs` / `ai.mjs`         | Codex CLI 与兼容 API 的模型接入           |
-| `src/model.mjs` / `operations.mjs` | 设计操作契约、承重保护与几何校验          |
-| `public/`                          | 桌面外壳、AI 对话和原编辑器桥接           |
-| `vendor/`                          | 固定版本的上游编辑器、家具目录与许可      |
-| `examples/` / `tests/`             | 无私人数据的示例与自动测试                |
+反馈时请附上版本号、复现步骤和脱敏后的截图或样例。 [提交问题](https://github.com/code-lawyer/HouseDIY/issues) · [贡献指南](CONTRIBUTING.md) · [更新记录](CHANGELOG.md)
 
-HouseDIY 的桌面外壳、项目存储、模型适配、对话编辑与识图转换为本项目代码。二维 / 三维设计器、家具渲染、手动工具与布局检查来自 [ZWD11/house-plan-designer](https://github.com/ZWD11/house-plan-designer)，固定提交为 `dd5a61070ea0a251fb13a141cd9a282be36fd292`，不作为 HouseDIY 原创能力宣称。
-
-本项目新代码采用 [MIT](LICENSE)。上游及第三方署名见 [Third-party notices](THIRD_PARTY_NOTICES.md)。HouseDIY 是独立项目，不是 OpenAI 或上游设计器的官方产品。
-
-欢迎提交脱敏后的问题与改进建议，开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+HouseDIY 新增代码采用 MIT 许可。二维与三维设计器、手动布局工具和家具渲染来自 ZWD11 的 house-plan-designer。仓库保留上游的编译产物与许可，部分内嵌依赖版本仍待核实。 [MIT 许可](LICENSE) · [上游项目](https://github.com/ZWD11/house-plan-designer) · [第三方许可与版本说明](THIRD_PARTY_NOTICES.md)
