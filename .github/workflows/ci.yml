@@ -16,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -24,31 +24,46 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts
-        if: runner.os != 'Windows'
-      - run: npm ci
-        if: runner.os == 'Windows'
       - run: npm run check
       - run: npm test
+  windows:
+    name: Windows ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [editor, recovery, models, portable]
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+        if: matrix.suite != 'portable'
+      - run: npm ci
+        if: matrix.suite == 'portable'
       - name: Verify the Windows editor
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'editor'
         run: npm run test:ui
       - name: Verify design checks and recovery
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'recovery'
         run: npm run test:first-fixes
       - name: Verify custom model persistence
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'models'
         run: npm run test:models
       - name: Build the Windows portable application
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'portable'
         run: npm run build
       - name: Open and exercise the packaged application
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'portable'
         env:
           HOUSEDIY_PLAN_FIXTURE: examples/demo-plan.json
         run: npm run test:package
       - name: Bind the tested executable to the source commit
         id: release-proof
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'portable'
         shell: pwsh
         run: |
           $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
@@ -70,7 +85,7 @@ jobs:
           Copy-Item -LiteralPath .qa/packaged/results.json -Destination "release/HouseDIY-$version-test-results.json"
           "version=$version" >> $env:GITHUB_OUTPUT
       - name: Upload the verified Windows artifact
-        if: runner.os == 'Windows'
+        if: matrix.suite == 'portable'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: HouseDIY-windows-x64-${{ github.sha }}
