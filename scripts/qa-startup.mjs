@@ -204,9 +204,23 @@ try {
     page.waitForFunction(
       () =>
         !document.querySelector("#editor-view").hidden &&
-        document.querySelector("#editor-loading").hidden,
+        document.querySelector("#editor-loading").hidden &&
+        document.querySelector("#editor-view").getAttribute("aria-busy") ===
+          "false",
       { polling: 100, timeout: 60000 },
     );
+  const goHome = async () => {
+    const homeButtonEnabled = () =>
+      !document.querySelector("#home-button").disabled;
+    await page.waitForFunction(homeButtonEnabled, { polling: 100 });
+    await page.click("#home-button");
+    await page.waitForFunction(
+      () =>
+        !document.querySelector("#home-view").hidden &&
+        !document.querySelector("#home-button").disabled,
+      { polling: 100 },
+    );
+  };
   await waitEditor();
   let frame = await (await page.$("#designer")).contentFrame();
   await frame.waitForFunction(
@@ -281,6 +295,7 @@ try {
       {},
       swatchColor,
     );
+    await waitEditor();
   };
   await applyColor();
   await capture("furniture-color.png");
@@ -303,6 +318,7 @@ try {
   const undoRecorded = nextNote();
   await page.click("#undo-ai");
   await undoRecorded;
+  await waitEditor();
   await frame.waitForFunction(
     ({ id, color }) =>
       window.__designer.app.plan.furniture.find((f) => f.id === id)?.color ===
@@ -319,7 +335,7 @@ try {
     originalFurniture.id,
   );
   await applyColor();
-  await page.click("#home-button");
+  await goHome();
   await page.waitForSelector(".project-card", { visible: true });
   await page.click(".project-card");
   await waitEditor();
@@ -354,11 +370,7 @@ try {
   );
 
   if (fixturePlan) {
-    await page.click("#home-button");
-    await page.waitForFunction(
-      () => !document.querySelector("#home-view").hidden,
-      { polling: 100 },
-    );
+    await goHome();
     await (await page.$("#plan-file")).uploadFile(fixturePath);
     await waitEditor();
     frame = await (await page.$("#designer")).contentFrame();
@@ -443,7 +455,7 @@ try {
   });
   writeFileSync(imageFile, Buffer.from(png, "base64"));
   async function uploadRecoveryImage(action = "#generate-button") {
-    await page.click("#home-button");
+    await goHome();
     await page.waitForSelector("#new-project", { visible: true });
     await page.click("#new-project");
     await (await page.$("#floorplan-file")).uploadFile(imageFile);
@@ -604,7 +616,7 @@ try {
     () => window.__designer.app.plan.walls.length === 1,
   );
   const traced = await frame.evaluate(() => window.__HOUSEDIY__.projectId);
-  await page.click("#home-button");
+  await goHome();
   const tracedCard = `.project-entry[data-project-id="${traced}"] .project-card`;
   await page.waitForSelector(tracedCard, { visible: true });
   await page.click(tracedCard);
@@ -690,7 +702,7 @@ try {
   const modelFile = (id) =>
     join(data, "workspace", "models", "model-" + id + ".json");
   const trashRow = (id) => `.trash-row[data-project-id="${id}"]`;
-  await page.click("#home-button");
+  await goHome();
   for (const id of trashFixtures) {
     const button = `.project-entry[data-project-id="${id}"] .project-delete`;
     await page.waitForSelector(button, { visible: true });

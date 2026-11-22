@@ -44,6 +44,7 @@ try {
       () =>
         !document.querySelector("#editor-view").hidden &&
         document.querySelector("#editor-loading").hidden,
+      { polling: 100 },
     );
   const frame = async () => (await page.$("#designer")).contentFrame();
   async function repairedFrame(previousSource) {
@@ -54,7 +55,7 @@ try {
           "false" &&
         document.querySelector("#model-feedback").hidden &&
         document.querySelector("#editor-loading").hidden,
-      {},
+      { polling: 100 },
       previousSource,
     );
     return frame();
@@ -89,7 +90,7 @@ try {
         });
         return blue;
       },
-      { timeout: 30000 },
+      { polling: 100, timeout: 30000 },
       id,
     );
   }
@@ -218,6 +219,7 @@ try {
   const recipient = await browser.createBrowserContext();
   try {
     const offline = await recipient.newPage();
+    await offline.bringToFront();
     const requests = [];
     offline.on("pageerror", (error) => errors.push(error.message));
     await offline.setRequestInterception(true);
@@ -237,7 +239,7 @@ try {
         window.__designer?.app.plan.furniture.some(
           (item) => item.modelId === modelId,
         ),
-      { timeout: 60000 },
+      { polling: 100, timeout: 60000 },
       id,
     );
     await offline.evaluate(() => document.querySelector("#sbX")?.click());
@@ -263,6 +265,7 @@ try {
     assert.deepEqual(requests, []);
   } finally {
     await recipient.close();
+    await page.bringToFront();
   }
   pass(
     "standalone shared HTML renders the placed GLB and calibrated underlay offline without desktop resources",
