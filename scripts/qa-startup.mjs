@@ -112,8 +112,14 @@ try {
     }
   }
   assert.ok(browser, "Packaged app starts");
-  const pages = await browser.pages();
-  page = pages.find((p) => p.url().includes("127.0.0.1"));
+  // DevTools can accept the connection before the first BrowserWindow navigates.
+  const appTarget = await browser.waitForTarget(
+    (target) =>
+      target.type() === "page" &&
+      /^http:\/\/127\.0\.0\.1:\d+\//.test(target.url()),
+    { timeout: 60000 },
+  );
+  page = await appTarget.page();
   assert.ok(page, "Application opened through the local service");
   page.on("pageerror", (error) => results.errors.push(error.message));
   const failedRequests = [];
