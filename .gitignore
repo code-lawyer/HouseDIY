@@ -21,14 +21,17 @@
 !/design-qa.md
 
 # Local acceptance scripts contain private fixtures and historical evidence.
+/docs/research/
 /scripts/*
 !/scripts/dev.mjs
+!/scripts/check-build-deps.mjs
 !/scripts/electron-qa.mjs
 !/scripts/qa-startup.mjs
 !/scripts/qa-regressions.mjs
 !/scripts/qa-first-fixes.mjs
 !/scripts/qa-model-assets.mjs
 !/scripts/audit-ui.mjs
+!/scripts/upgrade-portable.ps1
 
 node_modules/
 *.log

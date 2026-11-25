@@ -1,3 +1,21 @@
+const underlayFields = [
+  "src",
+  "imgW",
+  "imgH",
+  "mmPerPx",
+  "x",
+  "y",
+  "opacity",
+  "visible",
+  "locked",
+];
+export const snapshotUnderlay = (underlay) =>
+  underlay
+    ? Object.fromEntries(underlayFields.map((key) => [key, underlay[key]]))
+    : null;
+export const sameUnderlay = (a, b) =>
+  a && b ? underlayFields.every((key) => a[key] === b[key]) : !a && !b;
+
 // A session owns its saved version and queue, even across asynchronous requests.
 export class EditorSession {
   constructor(project, variant, { readState, write, status }) {
@@ -5,7 +23,7 @@ export class EditorSession {
     this.variant = variant;
     this.revision = variant.revision;
     this.baseline = JSON.stringify(variant.plan);
-    this.underlayBaseline = JSON.stringify(project.underlay);
+    this.underlayBaseline = snapshotUnderlay(project.underlay);
     this.readState = readState;
     this.write = write;
     this.status = status;
@@ -20,7 +38,7 @@ export class EditorSession {
   matches(state) {
     return (
       JSON.stringify(state.plan) === this.baseline &&
-      JSON.stringify(state.underlay) === this.underlayBaseline
+      sameUnderlay(state.underlay, this.underlayBaseline)
     );
   }
   schedule(onError) {
@@ -56,8 +74,10 @@ export class EditorSession {
         return state;
       }
       this.status("正在保存…");
-      const nextUnderlay = JSON.stringify(state.underlay);
-      const underlayChanged = nextUnderlay !== this.underlayBaseline;
+      const underlayChanged = !sameUnderlay(
+        state.underlay,
+        this.underlayBaseline,
+      );
       const result = await this.write(this.endpoint("save"), {
         revision: this.revision,
         lifecycle: this.project.lifecycle ?? 0,
@@ -67,7 +87,7 @@ export class EditorSession {
               underlay: state.underlay,
               expectedUnderlayVersion: this.project.underlayVersion ?? 0,
             }
-          : {}),
+          : { includeUnderlay: false }),
         description,
       });
       this.revision = result.revision;
@@ -78,7 +98,7 @@ export class EditorSession {
       if (underlayChanged) {
         this.project.underlay = result.underlay;
         this.project.underlayVersion = result.underlayVersion;
-        this.underlayBaseline = nextUnderlay;
+        this.underlayBaseline = snapshotUnderlay(state.underlay);
       }
       this.baseline = JSON.stringify(state.plan);
       // Re-read after every write: edits arriving during the save must also persist.

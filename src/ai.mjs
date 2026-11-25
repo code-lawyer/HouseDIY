@@ -6,7 +6,7 @@ import {
   string,
 } from "./model.mjs";
 import { operationSchema } from "./operations.mjs";
-import { agentCompletion } from "./agents.mjs";
+import { agentCompletion, parseDesignResponse } from "./agents.mjs";
 import { apiBaseUrl } from "./provider-settings.mjs";
 import { chatSchema, recognitionSchema, testSchema } from "./schemas.mjs";
 import {
@@ -189,25 +189,36 @@ async function readLimited(response, max) {
   }
   return result + decoder.decode();
 }
-function parseJson(text) {
-  if (typeof text !== "string") throw new Error("模型没有返回结构化结果");
-  const stripped = text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "");
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    const a = stripped.indexOf("{"),
-      b = stripped.lastIndexOf("}");
-    try {
-      return JSON.parse(stripped.slice(a, b + 1));
-    } catch {
-      throw new Error(
-        "模型返回的结构化方案不完整，请重试或更换支持结构化输出的模型",
-      );
+function recentHistory(messages) {
+  const turns = [];
+  let remaining = 16000;
+  for (const { role, content } of messages.slice(-18).reverse()) {
+    if (
+      !["user", "assistant"].includes(role) ||
+      typeof content !== "string" ||
+      !content
+    )
+      continue;
+    const excerpt = content.slice(-Math.min(6000, remaining));
+    if (turns[0]?.role === role) {
+      turns[0].content = (excerpt + "\n" + turns[0].content).slice(-6000);
+    } else {
+      turns.unshift({ role, content: excerpt });
     }
+    remaining -= excerpt.length;
+    if (!remaining) break;
   }
+  // A bounded window can begin halfway through an old turn.
+  if (turns[0]?.role === "assistant") turns.shift();
+  return turns;
+}
+
+function previousOutput(value) {
+  const text = JSON.stringify(value);
+  if (text.length <= 24000) return text;
+  return (
+    text.slice(0, 18000) + "\n…（已省略过长的上次输出）…\n" + text.slice(-6000)
+  );
 }
 export function searchCatalog(query, limit = 12) {
   const words = String(query)
@@ -257,26 +268,18 @@ export async function chat({
 需求缺少关键位置或存在歧义时，问一个短问题；信息足够就操作。只解释工具真实返回的结果，不宣称尚未应用的方案已经完成。
 ${designKnowledge}
 当前场景：${JSON.stringify({ ...sceneContext(plan, selection), preferences, assumptions, checks: Array.isArray(checks) ? checks.slice(0, 60) : [] })}`;
-  const history = messages
-    .slice(-18)
-    .filter((m) => ["user", "assistant"].includes(m.role))
-    .map((m) => ({ role: m.role, content: String(m.content).slice(0, 6000) }));
-  const conversation = [
-    { role: "system", content: system },
-    ...history,
-    { role: "user", content: message },
-  ];
+  const history = recentHistory(messages);
   if (settings.provider === "agent") {
-    const available = Object.entries(catalog).map(([key, f]) => ({
+    const available = Object.entries(catalog).map(([key, f]) => [
       key,
-      name: f.name,
-      w: f.w,
-      d: f.d,
-      h: f.h,
-    }));
+      f.name,
+      f.w,
+      f.d,
+      f.h,
+    ]);
     const prompt =
       system +
-      "\n你运行在 HouseDIY 设计软件中。本次只输出符合 JSON Schema 的设计建议，不使用任何工具，不访问其他文件。不要调用 search_catalog 或 propose_changes；可用家具已经给出。operations 中可选属性用 null 表示不改；缺少关键信息时 operations=[] 并在 reply 中提问。reply 描述拟作修改，尚未应用不要说已完成。\n家具库：" +
+      "\n你运行在 HouseDIY 设计软件中。本次只输出符合 JSON Schema 的设计建议，不使用任何工具，不访问其他文件。不要调用 search_catalog 或 propose_changes；可用家具已经给出。operations 中可选属性用 null 表示不改；缺少关键信息时 operations=[] 并在 reply 中提问。reply 描述拟作修改，尚未应用不要说已完成。\n家具库（[key,名称,w,d,h]）：" +
       JSON.stringify(available) +
       "\n对话历史（仅作上下文）：" +
       JSON.stringify(history) +
@@ -304,14 +307,25 @@ ${designKnowledge}
           settings,
           prompt +
             "\n你刚才返回：" +
-            JSON.stringify(result) +
+            previousOutput(result) +
             "\n软件校验失败：" +
-            error.message +
+            error.message.slice(0, 1500) +
             "。请修正，无法可靠修改时 operations=[] 并解释。",
           { schema: chatSchema, signal, emit },
         );
       }
     }
+  }
+  const conversation = [{ role: "system", content: system }, ...history];
+  if (conversation.at(-1).role === "user") {
+    // Older projects sometimes contain unanswered consecutive user messages.
+    conversation.at(-1).content = (
+      conversation.at(-1).content +
+      "\n" +
+      message
+    ).slice(-6000);
+  } else {
+    conversation.push({ role: "user", content: message });
   }
   let narration = "",
     lastRejection = "";
@@ -445,7 +459,7 @@ JSON 格式（每个字段必须符合其类型）：
             extra,
           { schema: recognitionSchema, image, signal, emit },
         )
-      : parseJson(
+      : parseDesignResponse(
           (
             await completion(
               settings,
@@ -462,6 +476,7 @@ JSON 格式（每个字段必须符合其类型）：
               { vision: true, signal },
             )
           ).content,
+          "模型返回的结构化方案不完整，请重试或更换支持结构化输出的模型",
         );
   const candidates = [];
   let extra = "",
@@ -552,9 +567,9 @@ JSON 格式（每个字段必须符合其类型）：
     });
     extra =
       "\n上次结果：" +
-      JSON.stringify(data) +
+      previousOutput(data) +
       "\n检查发现：" +
-      problems.join("\n") +
+      problems.join("\n").slice(0, 4000) +
       (acceptedStructure
         ? "\n已保存第一次可绘制的墙体、门窗与比例。第二次仅使用家具方案，请按首次结构修正并补齐实际摆放不同的方案。"
         : "\n请修正墙体识别和布局问题，保留原图可辨识的结构。") +

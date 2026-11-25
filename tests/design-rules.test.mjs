@@ -310,6 +310,27 @@ test("the final review protects ambiguous walls and openings while accepting a g
   adjusted.openings[0].width -= 100;
   assert.equal(reviewDesign(plan, adjusted, unlocked).ok, true);
 });
+test("crossings near a protected wall's endpoints preserve its ID, span and openings", () => {
+  const original = empty();
+  const wall = original.walls[0];
+  const start = original.nodes.find((n) => n.id === wall.a);
+  const end = original.nodes.find((n) => n.id === wall.b);
+  for (const x of [start.x + 3, start.x + 7, end.x - 3]) {
+    const edited = applyOperations(original, [
+      { op: "add_wall", a: [x, start.y - 500], b: [x, start.y + 500], t: 100 },
+    ]).plan;
+    assert.deepEqual(
+      edited.walls.find((w) => w.id === wall.id),
+      wall,
+    );
+    assert.deepEqual(edited.openings, original.openings);
+    assert.ok(
+      !reviewDesign(original, edited, { layoutLocked: false }).issues.some(
+        (i) => i.rule === "protected-structure",
+      ),
+    );
+  }
+});
 test("ordinary tall cabinets need a usable rear wall, independent storage is explicit", () => {
   const p = empty(),
     op = { op: "add_furniture", key: "cabWardrobe", x: 3000, y: 2250, w: 1200 };
@@ -424,6 +445,76 @@ test("scene context retains site facts and recognition retains door handing", ()
   );
 });
 
+test("CLI prompts retain selected furniture and current request once while bounding history, mesh data and retries", async () => {
+  const plan = empty();
+  const f = newFurniture("freeBox");
+  f.opt = {
+    shape: "model",
+    mat: "stone",
+    model: "MESH-DATA".repeat(15000),
+    fp: "HULL-DATA".repeat(5000),
+  };
+  plan.furniture.push(f);
+  const messages = Array.from({ length: 18 }, (_, index) => ({
+    role: index % 2 ? "user" : "assistant",
+    content: "历史".repeat(2950) + index,
+  }));
+  const message = "本轮需求唯一标识";
+  const prompts = [];
+  await chat({
+    settings: { provider: "agent" },
+    plan,
+    messages,
+    selection: { kind: "furn", id: f.id },
+    message,
+    completeAgent: async (_settings, prompt) => {
+      prompts.push(prompt);
+      return prompts.length === 1
+        ? {
+            reply: "重新核对",
+            operations: [{}],
+            extra: "多余的字段".repeat(20000),
+          }
+        : { reply: "请确认", operations: [] };
+    },
+  });
+  const [first, retry] = prompts;
+  assert.ok(first.length < 50000);
+  assert.ok(retry.length - first.length < 25000);
+  assert.equal(first.split(message).length, 2);
+  assert.match(first, /"mat":"stone"/);
+  assert.ok(first.includes(f.id));
+  assert.ok(!first.includes("MESH-DATA") && !first.includes("HULL-DATA"));
+  assert.ok(plan.furniture[0].opt.model.startsWith("MESH-DATA"));
+});
+test("API history starts with a user and folds unanswered legacy messages before the current turn", async (t) => {
+  let request;
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    request = JSON.parse(options.body);
+    return Response.json({
+      choices: [{ message: { role: "assistant", content: "收到" } }],
+    });
+  });
+  await chat({
+    settings: {
+      provider: "api",
+      baseUrl: "http://localhost/v1",
+      model: "fixture",
+    },
+    plan: empty(),
+    messages: [
+      { role: "assistant", content: "早期回复" },
+      { role: "user", content: "旧问题一" },
+      { role: "user", content: "旧问题二" },
+    ],
+    message: "当前问题",
+  });
+  assert.deepEqual(
+    request.messages.map((m) => m.role),
+    ["system", "user"],
+  );
+  assert.equal(request.messages.at(-1).content, "旧问题一\n旧问题二\n当前问题");
+});
 test("Codex uses the same knowledge and reviews, with a correction before a proposal", async () => {
   const plan = empty(),
     prompts = [];

@@ -46,7 +46,7 @@ if (args[0] === "--version") {
         image = body.find((p) => p.type === "image");
       assert.equal(body[0].type, "text");
       if (image) assert.deepEqual(image, { ...imageFixture, type: "image" });
-      reply = JSON.stringify(response(image));
+      reply = "根据这份图纸，建议如下。\n" + JSON.stringify(response(image));
       output({
         jsonrpc: "2.0",
         id: 8,
@@ -107,7 +107,10 @@ if (args[0] === "--version") {
     output({
       type: "result",
       subtype: "success",
-      result: JSON.stringify(response(content[1])),
+      result:
+        "```json\n" +
+        JSON.stringify(response(content[1])) +
+        "\n```\n以上为设计建议。",
     });
   }
 }

@@ -18,23 +18,39 @@ export function agentImage(image) {
   return { mimeType: imageParts[1], data: imageParts[2] };
 }
 
-function designJson(value) {
-  try {
-    const result =
-      typeof value === "string"
-        ? JSON.parse(
-            value
-              .trim()
-              .replace(/^```(?:json)?\s*/i, "")
-              .replace(/\s*```$/, ""),
-          )
-        : value;
-    if (result && typeof result === "object" && !Array.isArray(result))
-      return result;
-  } catch {
-    // Report a stable error without sending CLI diagnostics or prompts back to the UI.
+export function parseDesignResponse(value, errorMessage) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    try {
+      value = JSON.parse(text);
+    } catch {
+      const fences = text.matchAll(
+        /^`{3}(?:json)?[^\S\r\n]*\r?\n([\s\S]*?)^`{3}[^\S\r\n]*$/gim,
+      );
+      const fenced = fences.next().value;
+      if (fenced && !fences.next().done) throw new Error(errorMessage);
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (
+        !fenced &&
+        text.slice(0, start).trimEnd().endsWith("[") &&
+        text
+          .slice(end + 1)
+          .trimStart()
+          .startsWith("]")
+      )
+        throw new Error(errorMessage);
+      const candidate = fenced?.[1] ?? text.slice(start, end + 1);
+      try {
+        value = JSON.parse(candidate);
+      } catch {
+        throw new Error(errorMessage);
+      }
+    }
   }
-  throw new Error("CLI 未返回完整的设计数据，请重试或换用支持此任务的模型");
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(errorMessage);
+  return value;
 }
 
 export async function agentStatus(kind, config, signal) {
@@ -271,5 +287,8 @@ export async function agentCompletion(
       timeout: image ? 420000 : 240000,
     }),
   );
-  return designJson(raw);
+  return parseDesignResponse(
+    raw,
+    "CLI 未返回完整的设计数据，请重试或换用支持此任务的模型",
+  );
 }

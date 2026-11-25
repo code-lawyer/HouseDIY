@@ -260,7 +260,7 @@ try {
     const shared = await offline.evaluate(() => ({
       underlay: window.__designer.app.underlay,
       desktopElements: document.querySelectorAll(
-        "[data-housediy-desktop],#__preset",
+        "[data-housediy-desktop],#__preset,script[nonce]",
       ).length,
       mesh: window.__SHARED__.models[0].b64,
       library: window.__SHARED__.fmLib,

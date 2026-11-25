@@ -16,6 +16,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   }
   try {
     const { openingRecovery } = await import("/editor-recovery.js");
+    const { snapshotUnderlay, sameUnderlay } =
+      await import("/editor-session.js");
     const recovery = openingRecovery(D, post);
     await window.__houseModelsReady;
     // Upstream initializes its undo baseline from the supplied preset plan.
@@ -60,21 +62,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     };
     const state = () => ({
       plan: structuredClone(D.app.plan),
-      underlay: D.app.underlay
-        ? Object.fromEntries(
-            [
-              "src",
-              "imgW",
-              "imgH",
-              "mmPerPx",
-              "x",
-              "y",
-              "opacity",
-              "visible",
-              "locked",
-            ].map((key) => [key, D.app.underlay[key]]),
-          )
-        : null,
+      underlay: snapshotUnderlay(D.app.underlay),
       selection: structuredClone(D.app.sel),
       gesture,
     });
@@ -219,18 +207,13 @@ window.addEventListener("DOMContentLoaded", async () => {
         post({ type: "reply", requestId, error: error.message });
       }
     });
-    let lastPlan = JSON.stringify({
-        plan: D.app.plan,
-        underlay: state().underlay,
-      }),
+    let lastPlan = JSON.stringify(D.app.plan),
+      lastUnderlay = snapshotUnderlay(D.app.underlay),
       lastSelection = "";
     setInterval(() => {
       recovery.update();
       if (gesture) return;
-      const plan = JSON.stringify({
-          plan: D.app.plan,
-          underlay: state().underlay,
-        }),
+      const plan = JSON.stringify(D.app.plan),
         selectedFurniture = D.app.plan.furniture.find(
           (f) => D.app.sel.kind === "furn" && f.id === D.app.sel.id,
         ),
@@ -239,8 +222,9 @@ window.addEventListener("DOMContentLoaded", async () => {
           selectedFurniture?.name,
           selectedFurniture?.color,
         ]);
-      if (plan !== lastPlan) {
+      if (plan !== lastPlan || !sameUnderlay(lastUnderlay, D.app.underlay)) {
         lastPlan = plan;
+        lastUnderlay = snapshotUnderlay(D.app.underlay);
         post({ type: "changed" });
       }
       if (sel !== lastSelection) {

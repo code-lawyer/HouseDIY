@@ -329,19 +329,32 @@ export function normalizeWalls(plan, maxPieces = Infinity) {
     const a = nodes.get(w.a),
       b = nodes.get(w.b),
       len = Math.hypot(b.x - a.x, b.y - a.y);
-    const ts = [
+    const rawTs = [
       ...new Set(breaks.get(w.id).map((n) => Math.round(n * 1e8) / 1e8)),
     ].sort((a, b) => a - b);
+    const ts = [0];
+    for (const t of rawTs) {
+      if (t <= 0 || t >= 1) continue;
+      // Keep the full original span when a cut would make a wall too short
+      // for validatePlan. Dropping the short piece would move the endpoint.
+      if ((t - ts.at(-1)) * len >= 10 && (1 - t) * len >= 10) ts.push(t);
+    }
+    ts.push(1);
     const segments = [];
     for (let i = 1; i < ts.length; i++) {
       const from = ts[i - 1],
         to = ts[i];
-      if ((to - from) * len < 5) continue;
       const piece = {
         ...w,
         id: i === 1 ? w.id : id(),
-        a: nodeAt(a.x + (b.x - a.x) * from, a.y + (b.y - a.y) * from),
-        b: nodeAt(a.x + (b.x - a.x) * to, a.y + (b.y - a.y) * to),
+        a:
+          from === 0
+            ? w.a
+            : nodeAt(a.x + (b.x - a.x) * from, a.y + (b.y - a.y) * from),
+        b:
+          to === 1
+            ? w.b
+            : nodeAt(a.x + (b.x - a.x) * to, a.y + (b.y - a.y) * to),
       };
       next.push(piece);
       segments.push({ id: piece.id, from: from * len, to: to * len });
@@ -537,8 +550,8 @@ export function applyOperations(input, operations) {
 }
 export function sceneContext(plan, selection) {
   const nodes = new Map(plan.nodes.map((n) => [n.id, n]));
-  return {
-    ...structuredClone(plan),
+  return structuredClone({
+    ...plan,
     name: plan.name,
     units: "mm; x 向右,y 向下; 家具坐标是中心",
     height: plan.height,
@@ -550,9 +563,17 @@ export function sceneContext(plan, selection) {
       b: nodes.get(w.b),
     })),
     openings: plan.openings,
-    rooms: structuredClone(plan.rooms),
-    furniture: structuredClone(plan.furniture),
-  };
+    furniture: plan.furniture.map(
+      ({ model, parts, b64, icon, top, opt, ...item }) => {
+        if (opt) {
+          // The upstream shape editor stores its serialized mesh under opt.model.
+          const { model, parts, fp, ...options } = opt;
+          item.opt = options;
+        }
+        return item;
+      },
+    ),
+  });
 }
 // Compatible vision services sometimes quote numbers or use named pixel coordinates.
 // Keep these conversions confined to recognition; saved plans and AI edits stay strict.

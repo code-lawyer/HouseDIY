@@ -9,7 +9,11 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { agentCompletion, agentStatus } from "../src/agents.mjs";
+import {
+  agentCompletion,
+  agentStatus,
+  parseDesignResponse,
+} from "../src/agents.mjs";
 import { chatSchema } from "../src/schemas.mjs";
 import { apiBaseUrl } from "../src/provider-settings.mjs";
 import { agentExecutable } from "../src/agent-process.mjs";
@@ -17,6 +21,29 @@ import { agentExecutable } from "../src/agent-process.mjs";
 const path = fileURLToPath(
   new URL("./fixtures/local-agent.mjs", import.meta.url),
 );
+test("design replies accept prose around one JSON object and reject incomplete or ambiguous data", () => {
+  const expected = { reply: "柜子 {A}", operations: [] };
+  const json = JSON.stringify(expected);
+  for (const value of [
+    expected,
+    json,
+    "设计建议如下。\n" + json + "\n请确认。",
+    "[INFO] design response follows\n" + json + "\n[OK]",
+    "参考 {说明}\n```JSON\r\n" + json + "\r\n```\r\n以上为调整建议。",
+  ])
+    assert.deepEqual(parseDesignResponse(value, "无有效方案"), expected);
+  for (const value of [
+    null,
+    [expected],
+    "[" + json + "]",
+    "[INFO] response\n[ " + json + " ]\n[OK]",
+    "```json\n[" + json + "]\n```",
+    ("```json\n" + json + "\n```\n").repeat(2),
+    json + "\n" + json,
+    '{"reply":',
+  ])
+    assert.throws(() => parseDesignResponse(value, "无有效方案"), /无有效方案/);
+});
 for (const agent of ["codex", "claude", "gemini"]) {
   test(`${agent} sends text and image to a restricted local CLI and normalizes replies`, async (t) => {
     mkdirSync(".qa", { recursive: true });

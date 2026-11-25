@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7-rc.4 — 2026-11-24 (Windows prerelease)
+
+- Store imported images as separate workspace attachments so ordinary edits do not rewrite the image bytes. Back up the entire workspace before opening projects with this version. To return to rc.3, restore the pre-upgrade backup.
+- Keep completed chat turns together, retain the detected CLI status when saving its settings, and accept design JSON surrounded by explanatory text.
+- Preserve wall identities when dropping tiny split segments. Scope the editor's script nonce to its inline scripts and keep it out of offline exports.
+
 ## 0.1.7-rc.3 — 2026-11-22 (Windows prerelease)
 
 - Connect through an existing local Codex, Claude Code or Gemini CLI login, or use an OpenAI-compatible API. Remote API URLs require HTTPS. Loopback HTTP remains available.

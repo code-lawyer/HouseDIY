@@ -2,9 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { Script } from "node:vm";
+import { createHash } from "node:crypto";
 
 const entry = new URL("../public/index.html", import.meta.url);
 const html = readFileSync(entry, "utf8");
+
+test("the desktop adaptations run against the recorded upstream editor", () => {
+  const vendor = new URL("../vendor/", import.meta.url);
+  const manifest = JSON.parse(
+    readFileSync(new URL("DEPENDENCIES.json", vendor), "utf8"),
+  );
+  const template = readFileSync(new URL("designer.html", vendor));
+  assert.equal(
+    createHash("sha256").update(template).digest("hex"),
+    manifest.upstream.sha256,
+  );
+});
 
 test("local HTML entry can resolve its appearance and startup resources", () => {
   const references = [

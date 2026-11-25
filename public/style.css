@@ -151,6 +151,9 @@ select {
 .model-dot.ready {
   background: var(--sage);
 }
+.model-dot.detected {
+  background: #a57724;
+}
 .divider {
   height: 23px;
   border-left: 1px solid var(--line);

@@ -2,7 +2,7 @@
 
 HouseDIY 是面向单层住宅的 Windows 桌面设计工具。导入户型图后，可以在 2D、3D 或分屏里描墙、布置家具，也可以用 AI 生成布局，再通过对话或手动编辑调整方案。
 
-[下载 Windows x64 便携版](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.3/HouseDIY-0.1.7-rc.3-portable.exe) · [SHA-256 校验文件](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.3/HouseDIY-0.1.7-rc.3-portable.sha256) · [v0.1.7-rc.3 发布说明](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.3)
+[下载 Windows x64 便携版](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.4/HouseDIY-0.1.7-rc.4-portable.exe) · [SHA-256 校验文件](https://github.com/code-lawyer/HouseDIY/releases/download/v0.1.7-rc.4/HouseDIY-0.1.7-rc.4-portable.sha256) · [v0.1.7-rc.4 发布说明](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.4)
 
 ![HouseDIY v0.1.7-rc.3 中的日光客厅示例、3D 编辑区与 AI 对话侧栏](docs/images/0.1.7-rc.3-editor.png)
 
@@ -11,8 +11,10 @@ HouseDIY 是面向单层住宅的 Windows 桌面设计工具。导入户型图�
 1. 下载便携 EXE 和校验文件。当前是未签名的测试版。在下载目录运行以下 PowerShell 命令，比对校验文件中的 SHA-256，确认一致后双击 EXE。
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 -LiteralPath .\HouseDIY-0.1.7-rc.3-portable.exe
+   Get-FileHash -Algorithm SHA256 -LiteralPath .\HouseDIY-0.1.7-rc.4-portable.exe
    ```
+
+   从旧版升级时，请先退出程序并备份整个 `workspace`。rc.4 会在下次保存旧项目时将图片迁移到 `workspace/images`。回退到 rc.3 时请还原升级前的工作区备份。
 
 2. 打开内置的「日光客厅 · 示例」，试试切换视图、移动家具或更改材质。手动编辑和查看示例无需配置 AI。
 3. 选择「导入户型图」上传 PNG、JPG 或 WebP，也可用「导入已有方案」继续编辑单层方案 JSON。 [示例 JSON](examples/demo-plan.json)
@@ -34,7 +36,7 @@ HouseDIY 是面向单层住宅的 Windows 桌面设计工具。导入户型图�
 
 Gemini CLI 入口面向符合资格的组织账号，识图依赖 CLI 的 ACP 图片能力。Claude Code 连接使用用户自行安装和登录的原版 CLI，适用 Anthropic 的接入条款。 [Gemini CLI 官方说明](https://github.com/google-gemini/gemini-cli#gemini-cli) · [Claude Code 条款](https://code.claude.com/docs/en/legal-and-compliance#can-customers-offer-claude-code-in-their-products)
 
-本版的自动验收使用模拟 CLI 和模拟 API 响应。 [本版验收记录](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.3)
+本版的自动验收使用模拟 CLI 和模拟 API 响应。 [本版验收记录](https://github.com/code-lawyer/HouseDIY/releases/tag/v0.1.7-rc.4)
 
 ## 数据与隐私
 
@@ -44,12 +46,14 @@ Gemini CLI 入口面向符合资格的组织账号，识图依赖 CLI 的 ACP �
 
 ## 从源码运行
 
+仓库提供的 `scripts/upgrade-portable.ps1` 可在 Windows 上核对同名 `.sha256` 文件、备份并校验工作区，再更新桌面快捷方式。
+
 使用 Node.js 24。以下命令检出当前测试版对应的源码。Windows x64 环境可构建便携程序。
 
 ```sh
 git clone https://github.com/code-lawyer/HouseDIY.git
 cd HouseDIY
-git switch --detach v0.1.7-rc.3
+git switch --detach v0.1.7-rc.4
 npm ci
 npm start
 ```

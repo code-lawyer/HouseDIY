@@ -22,6 +22,10 @@ function adapt(original, replacement) {
   template = template.replace(original, () => replacement);
 }
 adapt(
+  '<script type="module" crossorigin>',
+  '<script nonce="__HOUSEDIY_NONCE__" type="module" crossorigin>',
+);
+adapt(
   'location.search.includes("debug")&&(window.__designer={',
   "true&&(window.__designer={importModel:cN,",
 );
@@ -94,7 +98,7 @@ adapt(
 // source image and its referenced models belong in this copy of the editor.
 adapt(
   '(e=t.querySelector("#__shared"))==null||e.remove(),sf=',
-  't.querySelectorAll("#__shared,[data-housediy-desktop]").forEach(node=>node.remove()),sf=',
+  't.querySelectorAll("#__shared,[data-housediy-desktop]").forEach(node=>node.remove()),t.querySelectorAll("script[nonce]").forEach(node=>node.removeAttribute("nonce")),sf=',
 );
 adapt(
   "const e=[...new Set(J.floors.flatMap(r=>r.plan.furniture).map(r=>r.modelId).filter(Boolean))].map(r=>aM(r)).filter(Boolean).map(",
@@ -157,17 +161,18 @@ adapt(
   ':w.bearing?\'<button class="btn" disabled>承重墙不可拆除',
   ':window.__wallStructure?.(w)==="unknown"&&w.status!=="removed"?\'<button class="btn" disabled>承重待核实，暂不可拆除</button>\':w.bearing?\'<button class="btn" disabled>承重墙不可拆除',
 );
-export function editorHtml(project, variant) {
+export function editorHtml(project, variant, nonce) {
   const preset = {
     id: `housediy-${project.id}-${variant.id}`,
     plan: variant.plan,
     underlay: project.underlay,
     designPreferences: project.designPreferences,
   };
-  const payload = `<script data-housediy-desktop id="__preset">window.__PRESET__=${encode(preset)};window.__HOUSEDIY__=${encode({ projectId: project.id, variantId: variant.id })}</script><script data-housediy-desktop src="/editor-models.js"></script><script data-housediy-desktop src="/editor-shapes.js"></script>`;
+  const payload = `<script nonce="${nonce}" data-housediy-desktop id="__preset">window.__PRESET__=${encode(preset)};window.__HOUSEDIY__=${encode({ projectId: project.id, variantId: variant.id })}</script><script data-housediy-desktop src="/editor-models.js"></script><script data-housediy-desktop src="/editor-shapes.js"></script>`;
   // Both the attribution and the structural controls survive standalone export.
-  const sharedHead = `<script>window.__wallStructure=${wallStructure.toString()};\n${structure}</script>\n<!--\n${license.replaceAll("-->", "--&gt;")}\n-->`;
+  const sharedHead = `<script nonce="${nonce}">window.__wallStructure=${wallStructure.toString()};\n${structure}</script>\n<!--\n${license.replaceAll("-->", "--&gt;")}\n-->`;
   return template
+    .replace('nonce="__HOUSEDIY_NONCE__"', () => `nonce="${nonce}"`)
     .replace(/<meta charset[^>]*>/i, (m) => m + sharedHead + payload)
     .replace(
       "</head>",

@@ -1006,8 +1006,13 @@ function showProposal(session, proposal, expected, baseRevision) {
 $("chat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (controller || workspaceLocked || !current?.ready) return;
-  const message = $("chat-input").value.trim();
+  const draft = $("chat-input").value;
+  const message = draft.trim();
   if (!message) return;
+  if (message.length > 6000) {
+    toast("单次需求请控制在 6000 字以内");
+    return;
+  }
   if (settings?.provider === "api" && !settings.model) {
     openSettings();
     toast("先配置聊天模型，就可以在这里直接调整方案。");
@@ -1018,7 +1023,7 @@ $("chat-form").addEventListener("submit", async (event) => {
     return;
   }
   const session = current;
-  let assistant;
+  let pendingMessage, assistant;
   const abort = new AbortController();
   controller = abort;
   setChatBusy(true);
@@ -1032,8 +1037,7 @@ $("chat-form").addEventListener("submit", async (event) => {
     const expected = JSON.stringify(state.plan),
       baseRevision = session.revision;
     $("messages").querySelector(".chat-welcome")?.remove();
-    appendMessage("user", message);
-    session.variant.messages.push({ role: "user", content: message });
+    pendingMessage = appendMessage("user", message);
     $("chat-input").value = "";
     fitComposer();
     $("chat-progress").textContent = "正在准备当前方案…";
@@ -1067,7 +1071,11 @@ $("chat-form").addEventListener("submit", async (event) => {
     if (assistant)
       assistant.querySelector(".message-content").textContent = result.reply;
     else appendMessage("assistant", result.reply);
-    session.variant.messages.push({ role: "assistant", content: result.reply });
+    session.variant.messages.push(
+      { role: "user", content: message },
+      { role: "assistant", content: result.reply },
+    );
+    pendingMessage = null;
     if (result.proposal) {
       if (result.proposal.structural)
         showProposal(session, result.proposal, expected, baseRevision);
@@ -1079,6 +1087,13 @@ $("chat-form").addEventListener("submit", async (event) => {
     }
   } catch (error) {
     if (current === session) {
+      if (pendingMessage) {
+        pendingMessage.remove();
+        assistant?.remove();
+        if (!$("messages").childElementCount) renderMessages();
+        $("chat-input").value = draft;
+        fitComposer();
+      }
       if (error.name === "AbortError")
         appendMessage(
           "assistant",
@@ -1261,17 +1276,36 @@ const agentHints = {
   gemini:
     "在终端用符合条件的组织 Code Assist 账号登录 Gemini CLI。个人 Google 登录已迁往 Antigravity。",
 };
+const agentChecks = new Map();
+const checkKey = (kind, path) => kind + ":" + (path || "").trim();
 let agentDrafts = {},
   displayedAgent,
   detection = 0,
   settingsSaving = false;
 function updateModelIndicator() {
+  const isApi = settings?.provider === "api";
+  const status =
+    !isApi &&
+    agentChecks.get(
+      checkKey(settings?.agent, settings?.agents?.[settings?.agent]?.path),
+    );
+  const apiError =
+    settings?.settingsError ||
+    settings?.apiAddressError ||
+    settings?.credentialError;
+  const ready = isApi
+    ? !!settings.model && !apiError
+    : status?.loggedIn === true;
+  $("model-dot").classList.toggle("ready", ready);
   $("model-dot").classList.toggle(
-    "ready",
-    settings?.provider === "api" &&
-      !!settings.model &&
-      !settings.apiAddressError,
+    "detected",
+    !!status?.available && status.loggedIn === null,
   );
+  const description = isApi
+    ? apiError || (ready ? "已配置 API 模型" : "尚未配置 API 模型")
+    : status?.message || "等待检测本机 CLI";
+  $("settings-button").title = description;
+  $("settings-button").setAttribute("aria-label", "模型设置，" + description);
 }
 async function loadSettings() {
   settings = await api("/api/settings");
@@ -1301,7 +1335,6 @@ function cliFields() {
   };
 }
 function showAgent(kind) {
-  detection++;
   displayedAgent = kind;
   const profile = agentDrafts[kind] || {};
   $("agent-path").value = profile.path || "";
@@ -1310,7 +1343,16 @@ function showAgent(kind) {
   $("agent-effort-field").hidden = $("agent-effort").disabled =
     kind !== "codex";
   $("agent-install-hint").textContent = agentHints[kind];
-  $("agent-status").textContent = "等待检测本机 CLI";
+  showAgentStatus();
+}
+function showAgentStatus() {
+  detection++;
+  const status = agentChecks.get(
+    checkKey(displayedAgent, $("agent-path").value),
+  );
+  $("agent-status").textContent = status
+    ? [status.version, status.message].filter(Boolean).join(" · ")
+    : "等待检测本机 CLI";
   $("agent-detect").disabled = false;
 }
 function openSettings() {
@@ -1331,6 +1373,7 @@ function openSettings() {
 }
 $("settings-button").onclick = openSettings;
 $("model-provider").onchange = providerFields;
+$("agent-path").addEventListener("input", showAgentStatus);
 $("agent-kind").onchange = () => {
   agentDrafts[displayedAgent] = cliFields();
   showAgent($("agent-kind").value);
@@ -1344,19 +1387,15 @@ $("agent-detect").onclick = async () => {
   try {
     const status = await api("/api/agent/status", { agent: kind, config });
     if (sequence !== detection) return;
-    $("agent-status").textContent = [status.version, status.message]
-      .filter(Boolean)
-      .join(" · ");
-    if (
-      settings?.provider === "agent" &&
-      settings.agent === kind &&
-      (settings.agents[kind]?.path || "") === config.path.trim()
-    )
-      $("model-dot").classList.toggle("ready", status.loggedIn === true);
+    agentChecks.set(checkKey(kind, config.path), status);
   } catch (error) {
-    if (sequence === detection) $("agent-status").textContent = error.message;
+    if (sequence !== detection) return;
+    agentChecks.set(checkKey(kind, config.path), { message: error.message });
   } finally {
-    if (sequence === detection) $("agent-detect").disabled = false;
+    if (sequence === detection) {
+      showAgentStatus();
+      updateModelIndicator();
+    }
   }
 };
 $("settings-dialog").addEventListener("close", () => {

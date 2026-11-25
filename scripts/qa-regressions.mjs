@@ -72,6 +72,17 @@ try {
     held,
     onHeld;
   page.on("request", (request) => {
+    if (request.url().endsWith("/api/agent/status")) {
+      const gemini = JSON.parse(request.postData()).agent === "gemini";
+      return request.respond({
+        contentType: "application/json",
+        body: JSON.stringify({
+          available: true,
+          loggedIn: gemini ? null : true,
+          message: gemini ? "已找到 CLI，发送时验证资格" : "已登录",
+        }),
+      });
+    }
     if (request.url().endsWith("/save") && holdSave) {
       holdSave = false;
       held = request;
@@ -160,6 +171,7 @@ try {
           "false" && !document.querySelector("#chat-input").disabled,
       { polling: 100 },
     );
+    await page.$eval("#chat-input", (input) => input.select());
     await page.type("#chat-input", text);
     await page.click("#send-chat");
   };
@@ -180,6 +192,32 @@ try {
     });
   await page.goto(app.url);
   await page.waitForSelector(".project-card");
+  for (const [kind, state] of [
+    ["codex", "ready"],
+    ["gemini", "detected"],
+  ]) {
+    await page.click("#settings-button");
+    await page.select("#model-provider", "agent");
+    await page.select("#agent-kind", kind);
+    await page.click("#agent-detect");
+    await page.waitForFunction(() =>
+      document.querySelector("#agent-status").textContent.startsWith("已"),
+    );
+    await page.click("#save-settings");
+    await page.waitForSelector("#model-dot." + state);
+    await page.waitForFunction(
+      () => !document.querySelector("#settings-dialog").open,
+    );
+  }
+  await page.click("#settings-button");
+  await page.select("#model-provider", "api");
+  await page.click("#save-settings");
+  await page.waitForFunction(
+    () => !document.querySelector("#settings-dialog").open,
+  );
+  pass(
+    "Saving CLI settings keeps the detected profile status and distinguishes unverified sign-in",
+  );
   await shot("home-1600");
   await page.setViewport({ width: 1366, height: 768 });
   assert.ok(
@@ -433,6 +471,12 @@ try {
   pass("AI furniture edit and undo both persist through the session queue");
 
   const heldResponse = mock.holdNextResponse();
+  const messagesBeforeStop = app.store.variant(project.id, second.id).v
+    .messages;
+  const visibleUsersBeforeStop = await page.$$eval(
+    ".message.user",
+    (e) => e.length,
+  );
   try {
     await send("把沙发换成暖米色");
     await Promise.race([
@@ -453,6 +497,18 @@ try {
     heldResponse.release();
   }
   await heldResponse.completed;
+  assert.deepEqual(
+    app.store.variant(project.id, second.id).v.messages,
+    messagesBeforeStop,
+  );
+  assert.equal(
+    await page.$$eval(".message.user", (e) => e.length),
+    visibleUsersBeforeStop,
+  );
+  assert.equal(
+    await page.$eval("#chat-input", (e) => e.value),
+    "把沙发换成暖米色",
+  );
   assert.equal(
     await frame.evaluate(() => window.__designer.app.plan.furniture[0].color),
     color,
@@ -788,10 +844,22 @@ try {
   const targetWall = await frame.evaluate(
     () => window.__designer.app.plan.walls[2].id,
   );
+  const confirmOpening = async () => {
+    const button = await page.waitForSelector('#repair-form [type="submit"]', {
+      visible: true,
+    });
+    // Selecting the wall adds a chip to the composer and resizes the scrolling
+    // panel. Bring the whole submit control into view before the pointer click.
+    await button.evaluate((element) =>
+      element.scrollIntoView({ block: "center" }),
+    );
+    await button.click();
+    await button.dispose();
+  };
   await page.select("#repair-wall", targetWall);
   assert.equal(await page.$eval("#repair-pos", (e) => e.value), "2800");
   await shot("assign-opening");
-  await page.click('#repair-form [type="submit"]');
+  await confirmOpening();
   await frame.waitForFunction(
     () => window.__designer.app.plan.openings.length === 2,
   );
@@ -806,7 +874,7 @@ try {
   await page.click("#pending-list button");
   await page.waitForSelector("#repair-wall", { visible: true });
   await page.select("#repair-wall", targetWall);
-  await page.click('#repair-form [type="submit"]');
+  await confirmOpening();
   await page.waitForFunction(
     () =>
       document.querySelector("#editor-loading").hidden &&

@@ -72,9 +72,33 @@ test("external API edits return validated proposals and never mutate before appl
       .map((x) => JSON.parse(x.slice(6))),
     result = events.find((x) => x.type === "result");
   assert.equal(result.proposal.plan.furniture[0].color, "#d4c5af");
+  assert.deepEqual(
+    app.store
+      .variant(p.id, v.id)
+      .v.messages.slice(-2)
+      .map(({ role, content }) => [role, content]),
+    [
+      ["user", "把沙发改成暖米色"],
+      ["assistant", result.reply],
+    ],
+  );
   assert.equal(app.store.variant(p.id, v.id).v.revision, v.revision);
   assert.equal(mock.requests[0].model, "test");
   assert.ok(mock.requests[0].tools.length);
+});
+test("only the desktop editor's inline scripts receive the response nonce", async (t) => {
+  const { app, req } = await setup(t);
+  const p = app.store.get(app.store.list()[0].id);
+  const response = await req(`/editor/${p.id}/${p.variants[0].id}`);
+  const nonce = response.headers
+    .get("content-security-policy")
+    .match(/'nonce-([^']+)'/)[1];
+  const html = await response.text();
+  assert.equal(html.split(`nonce="${nonce}"`).length - 1, 3);
+  assert.ok(
+    html.includes(`<script nonce="${nonce}" type="module" crossorigin>`),
+  );
+  assert.ok(html.includes('<script id="__shared">window.__SHARED__='));
 });
 test("image import stores the original bytes separately from the model input", async (t) => {
   const { req, mock } = await setup(t);
@@ -392,10 +416,37 @@ test("manual changes during model execution reject stale proposal", async (t) =>
   const text = await (await request).text();
   assert.match(text, /409/);
   assert.match(text, /手动修改/);
+  assert.deepEqual(app.store.variant(p.id, v.id).v.messages, v.messages);
   assert.equal(
     app.store.variant(p.id, v.id).v.plan.furniture[0].x,
     changed.furniture[0].x,
   );
+});
+test("overlapping chat requests cannot commit a reply based on superseded history", async (t) => {
+  const { app, req, mock } = await setup(t);
+  const p = app.store.get(app.store.list()[0].id);
+  const v = p.variants[0];
+  const send = (message) =>
+    req(`/api/projects/${p.id}/variants/${v.id}/chat`, {
+      message,
+      revision: v.revision,
+    });
+  const held = mock.holdNextResponse();
+  const first = send("较早请求");
+  try {
+    await held.received;
+    const second = eventsFrom(await (await send("先完成的请求")).text());
+    assert.ok(second.some((event) => event.type === "result"));
+  } finally {
+    held.release();
+  }
+  const rejected = eventsFrom(await (await first).text());
+  assert.ok(
+    rejected.some((event) => event.type === "error" && event.status === 409),
+  );
+  const messages = app.store.variant(p.id, v.id).v.messages;
+  assert.equal(messages.length, v.messages.length + 2);
+  assert.equal(messages.at(-2).content, "先完成的请求");
 });
 test("image recognition persists three variants and image underlay", async (t) => {
   const { app, req } = await setup(t);
@@ -421,7 +472,7 @@ test("image recognition persists three variants and image underlay", async (t) =
   assert.equal(p.variants[0].plan.walls.length, 4);
 });
 test("provider errors are actionable without echoing provider bodies", async (t) => {
-  const { req, mock } = await setup(t);
+  const { app, req, mock } = await setup(t);
   await req("/api/settings", {
     provider: "api",
     baseUrl: mock.url,
@@ -430,6 +481,14 @@ test("provider errors are actionable without echoing provider bodies", async (t)
   const text = await (await req("/api/settings/test", {})).text();
   assert.match(text, /认证/);
   assert.ok(!text.includes("test-secret"));
+  const p = app.store.get(app.store.list()[0].id),
+    v = p.variants[0];
+  const chat = await req(`/api/projects/${p.id}/variants/${v.id}/chat`, {
+    message: "试试换色",
+    revision: v.revision,
+  });
+  assert.ok(eventsFrom(await chat.text()).some((e) => e.type === "error"));
+  assert.deepEqual(app.store.variant(p.id, v.id).v.messages, v.messages);
 });
 
 const eventsFrom = (text) =>
@@ -772,6 +831,7 @@ test("deletion cancels a running model and restored projects reject stale writes
     409,
   );
   const restored = app.store.get(p.id);
+  assert.deepEqual(restored.variants[0].messages, v.messages);
   assert.equal(
     restored.variants[0].plan.furniture[0].color,
     v.plan.furniture[0].color,

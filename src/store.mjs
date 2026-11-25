@@ -1,3 +1,4 @@
+import { createProjectImages } from "./project-images.mjs";
 import {
   mkdirSync,
   readFileSync,
@@ -206,7 +207,13 @@ function summarizeDamagedTrash(p) {
 }
 export function createStore(directory, secretCodec) {
   const projectsDir = join(directory, "projects");
+  const images = createProjectImages(directory);
   mkdirSync(projectsDir, { recursive: true });
+  function* projectRecords() {
+    for (const name of readdirSync(projectsDir))
+      if (name.endsWith(".json")) yield readProjectRecord(name.slice(0, -5));
+  }
+  const pruneImages = (candidates) => images.prune(projectRecords, candidates);
   const read = (file, fallback) => {
     try {
       return JSON.parse(readFileSync(file, "utf8"));
@@ -243,17 +250,31 @@ export function createStore(directory, secretCodec) {
   }
   // Cache only file identity and thumbnail metadata, never mutable plans, chat or history.
   const catalogIndex = new Map();
+  const fileStamp = (path) => {
+    const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return stat
+      ? [stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join("/")
+      : null;
+  };
+  const indexProject = (path, p) => {
+    const stamp = fileStamp(path);
+    if (stamp)
+      catalogIndex.set(p.id, {
+        stamp,
+        canonical: true,
+        summary: summarizeProject(p),
+      });
+  };
   function readProject(projectId, summaryOnly = false) {
     const path = projectPath(projectId),
       file = projectId + ".json";
     let p;
     try {
-      const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
-      if (!stat) {
+      const stamp = fileStamp(path);
+      if (!stamp) {
         catalogIndex.delete(projectId);
         return undefined;
       }
-      const stamp = [stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join("/");
       let known = catalogIndex.get(projectId);
       if (known?.stamp !== stamp) known = null;
       if (known && summaryOnly) return known.summary;
@@ -360,18 +381,7 @@ export function createStore(directory, secretCodec) {
     return { projects, unreadable };
   }
   const list = (deleted = false) => catalog(deleted).projects;
-  const get = (projectId) => {
-    const p = readProject(projectId);
-    if (!p) {
-      const e = new Error("项目不存在");
-      e.status = 404;
-      throw e;
-    }
-    if (p.deletedAt) {
-      const e = new Error("项目已移入回收站，请先恢复项目");
-      e.status = 410;
-      throw e;
-    }
+  function applyProjectDefaults(p) {
     p.lifecycle ??= 0;
     p.underlayVersion ??= 0;
     p.assumptions ??= [];
@@ -384,15 +394,49 @@ export function createStore(directory, secretCodec) {
       v.messages ??= [];
     }
     return p;
+  }
+  const get = (projectId, { includeImages = true } = {}) => {
+    const p = readProject(projectId);
+    if (!p) {
+      const e = new Error("项目不存在");
+      e.status = 404;
+      throw e;
+    }
+    if (p.deletedAt) {
+      const e = new Error("项目已移入回收站，请先恢复项目");
+      e.status = 410;
+      throw e;
+    }
+    applyProjectDefaults(p);
+    return includeImages ? images.unpack(p) : p;
   };
-  const save = (p) => {
-    const existing = get(p.id);
+  function persistProject(p, canonical) {
+    return writeRecord(images.pack(p), canonical);
+  }
+  function writeRecord(record, canonical) {
+    const path = projectPath(record.id);
+    images.hashes(record);
+    atomic(path, record);
+    if (canonical) indexProject(path, record);
+    else catalogIndex.delete(record.id);
+    return record;
+  }
+  const writeProject = (p, { canonical = false } = {}) => {
+    const existing = get(p.id, { includeImages: false });
     if (existing.lifecycle !== (p.lifecycle ?? 0))
       throw new Conflict("项目已经删除或恢复，请重新打开后操作");
+    const previousHashes = images.hashes(existing);
     p.updatedAt = Date.now();
-    atomic(projectPath(p.id), p);
-    return p;
+    const record = persistProject(p, canonical);
+    const retained = new Set(images.hashes(record));
+    const removed = new Set(
+      previousHashes.filter((hash) => !retained.has(hash)),
+    );
+    if (removed.size) pruneImages(removed);
+    return record;
   };
+  const save = (p) => images.unpack(writeProject(p));
+  const saveCanonical = (p) => writeProject(p, { canonical: true });
   const requireTrashed = (p, lifecycle) => {
     if (!p?.deletedAt)
       throw new Conflict("该项目已恢复或不在回收站，请刷新列表");
@@ -418,17 +462,28 @@ export function createStore(directory, secretCodec) {
     catalog,
     get,
     save,
-    assertLifecycle(projectId, lifecycle) {
-      const p = get(projectId);
+    pruneImages,
+    originalImage(projectId) {
+      const { image } = get(projectId, { includeImages: false });
+      if (!image) return null;
+      const dataUrl =
+        image.originalDataUrl ??
+        (image.originalSha256 && images.load(image.originalSha256));
+      return dataUrl ? { dataUrl, name: image.originalName } : null;
+    },
+    assertLifecycle(projectId, lifecycle, options) {
+      const p = get(projectId, options);
       if ((lifecycle ?? 0) !== p.lifecycle)
         throw new Conflict("项目已经删除或恢复，请重新打开后操作");
       return p;
     },
     trash(projectId, lifecycle) {
-      const p = this.assertLifecycle(projectId, lifecycle);
+      const p = this.assertLifecycle(projectId, lifecycle, {
+        includeImages: false,
+      });
       p.deletedAt = Date.now();
       p.lifecycle++;
-      atomic(projectPath(projectId), p);
+      persistProject(p, true);
       return { id: p.id, name: p.name, deletedAt: p.deletedAt };
     },
     listTrash() {
@@ -438,13 +493,16 @@ export function createStore(directory, secretCodec) {
       const p = requireTrashed(readProject(projectId), lifecycle);
       delete p.deletedAt;
       p.lifecycle = lifecycle + 1;
-      atomic(projectPath(projectId), p);
-      return get(projectId);
+      const record = images.pack(applyProjectDefaults(p));
+      const restored = images.unpack(record);
+      writeRecord(record, true);
+      return restored;
     },
     purgeTrash(projects, queueModelCleanup) {
       if (!Array.isArray(projects) || !projects.length)
         throw new Error("待永久删除的项目列表无效");
       const targets = new Map();
+      const imageCandidates = new Set();
       for (const project of projects) {
         const { id, lifecycle } = project ?? {};
         if (
@@ -455,6 +513,11 @@ export function createStore(directory, secretCodec) {
         )
           throw new Error("待永久删除的项目列表无效");
         const p = requireTrashed(readProjectRecord(id), lifecycle);
+        try {
+          for (const hash of images.hashes(p)) imageCandidates.add(hash);
+        } catch {
+          // A damaged trash record may still be removed by explicit confirmation.
+        }
         targets.set(id, projectModelIds(p));
       }
 
@@ -473,6 +536,7 @@ export function createStore(directory, secretCodec) {
         catalogIndex.delete(id);
         deletedCount++;
       }
+      if (deletedCount) pruneImages(imageCandidates);
       return {
         deletedCount,
         failedCount: targets.size - deletedCount,
@@ -495,12 +559,14 @@ export function createStore(directory, secretCodec) {
       return refs;
     },
     setDesignPreferences(projectId, body) {
-      const p = this.assertLifecycle(projectId, body.lifecycle);
+      const p = this.assertLifecycle(projectId, body.lifecycle, {
+        includeImages: false,
+      });
       for (const key of Object.keys(defaultDesignPreferences)) {
         if (typeof body[key] !== "boolean") throw new Error("设计范围设置无效");
         p.designPreferences[key] = body[key];
       }
-      save(p);
+      saveCanonical(p);
       return p.designPreferences;
     },
     publicSettings() {
@@ -626,8 +692,7 @@ export function createStore(directory, secretCodec) {
       };
       const path = projectPath(p.id);
       if (existsSync(path)) throw new Conflict("项目 ID 已存在，请重试");
-      atomic(path, p);
-      return p;
+      return images.unpack(persistProject(p, true));
     },
     createImageDraft(image, options) {
       const name = options.name || "户型底图";
@@ -658,7 +723,9 @@ export function createStore(directory, secretCodec) {
       });
     },
     finishImageDraft(source, result, reason) {
-      const p = this.assertLifecycle(source.id, source.lifecycle);
+      const p = this.assertLifecycle(source.id, source.lifecycle, {
+        includeImages: false,
+      });
       if (
         !!p.imageImport !== !!source.imageImport ||
         p.imageImport?.edited ||
@@ -688,10 +755,10 @@ export function createStore(directory, secretCodec) {
         p.assumptions = result.assumptions.slice(0, 30);
         delete p.imageImport;
       }
-      return save(p);
+      return images.unpack(saveCanonical(p));
     },
-    variant(projectId, variantId) {
-      const p = get(projectId),
+    variant(projectId, variantId, options) {
+      const p = get(projectId, options),
         v = p.variants.find((v) => v.id === variantId);
       if (!v) throw new Error("该设计方案不存在");
       return { p, v };
@@ -704,21 +771,31 @@ export function createStore(directory, secretCodec) {
       description = "手动编辑",
       underlay,
       expectedUnderlayVersion,
+      { includeUnderlay = true } = {},
     ) {
-      const { p, v } = this.variant(projectId, variantId);
+      const { p, v } = this.variant(projectId, variantId, {
+        includeImages: false,
+      });
       if (v.revision !== expected) throw new Conflict();
       const valid = validatePlan(plan),
         hash = revision(valid);
       if (underlay !== undefined) {
         const calibrated = validateUnderlay(underlay);
-        if (JSON.stringify(calibrated) !== JSON.stringify(p.underlay)) {
+        const previous = images.loadUnderlay(p.underlay);
+        const changed =
+          calibrated && previous
+            ? Object.keys(calibrated).some(
+                (key) => calibrated[key] !== previous[key],
+              )
+            : calibrated !== previous;
+        if (changed) {
           if (
             expectedUnderlayVersion !== undefined &&
             expectedUnderlayVersion !== p.underlayVersion
           )
             throw new Conflict("底图已在其他方案中修改，请重新打开项目后校准");
           const calibrationChanged = ["src", "x", "y", "mmPerPx"].some(
-            (key) => calibrated?.[key] !== p.underlay?.[key],
+            (key) => calibrated?.[key] !== previous?.[key],
           );
           p.underlay = calibrated;
           p.underlayVersion++;
@@ -726,11 +803,13 @@ export function createStore(directory, secretCodec) {
         }
       }
       if (hash === v.revision) {
-        if (underlay !== undefined) save(p);
+        if (underlay !== undefined) saveCanonical(p);
         return {
           revision: v.revision,
           plan: v.plan,
-          underlay: p.underlay,
+          ...(includeUnderlay
+            ? { underlay: images.loadUnderlay(p.underlay) }
+            : {}),
           underlayVersion: p.underlayVersion,
           ...(p.imageImport ? { imageImport: p.imageImport } : {}),
         };
@@ -745,23 +824,29 @@ export function createStore(directory, secretCodec) {
       v.plan = valid;
       v.revision = hash;
       if (p.imageImport) p.imageImport.edited = true;
-      save(p);
+      saveCanonical(p);
       return {
         revision: hash,
         plan: valid,
-        underlay: p.underlay,
+        ...(includeUnderlay
+          ? { underlay: images.loadUnderlay(p.underlay) }
+          : {}),
         underlayVersion: p.underlayVersion,
         ...(p.imageImport ? { imageImport: p.imageImport } : {}),
       };
     },
     addMessages(projectId, variantId, messages) {
-      const { p, v } = this.variant(projectId, variantId);
+      const { p, v } = this.variant(projectId, variantId, {
+        includeImages: false,
+      });
       v.messages.push(...messages);
       v.messages = v.messages.slice(-120);
-      save(p);
+      saveCanonical(p);
     },
     cloneVariant(projectId, variantId, name) {
-      const { p, v } = this.variant(projectId, variantId);
+      const { p, v } = this.variant(projectId, variantId, {
+        includeImages: false,
+      });
       if (p.variants.length >= 12)
         throw new Error("此项目已达到 12 个方案，请新建项目");
       const next = makeVariant({
@@ -772,7 +857,7 @@ export function createStore(directory, secretCodec) {
       next.plan.name = next.name;
       next.revision = revision(next.plan);
       p.variants.push(next);
-      save(p);
+      saveCanonical(p);
       return next;
     },
     ensureDemo(seedFile) {

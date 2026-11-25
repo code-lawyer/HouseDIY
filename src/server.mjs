@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { once } from "node:events";
+import { isDeepStrictEqual } from "node:util";
 import { createStore, Conflict } from "./store.mjs";
 import { chat, testConnection, recognize } from "./ai.mjs";
 import { agentStatus } from "./agents.mjs";
@@ -16,11 +17,18 @@ const base = new URL("../", import.meta.url);
 const originalImageLimit = 40_000_000;
 const imageData = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/;
 function publicProject(project) {
-  if (!project.image?.originalDataUrl) return project;
-  const { originalDataUrl, ...image } = project.image;
+  if (!project.image) return project;
+  const { originalDataUrl, originalSha256, ...image } = project.image;
+  if (!originalDataUrl && !originalSha256 && !image.originalAvailable)
+    return project;
   return {
     ...project,
-    image: { ...image, originalAvailable: !!originalDataUrl },
+    image: {
+      ...image,
+      originalAvailable: Boolean(
+        originalDataUrl || originalSha256 || image.originalAvailable,
+      ),
+    },
   };
 }
 export async function startServer({
@@ -35,6 +43,7 @@ export async function startServer({
   store.ensureDemo(seedFile);
   try {
     models.pruneUnreferenced(store.referencedModels);
+    store.pruneImages();
   } catch {
     // Preserve an unreadable cleanup queue and keep the projects accessible.
   }
@@ -114,8 +123,6 @@ export async function startServer({
   };
   const server = createServer(async (req, res) => {
     const nonce = randomBytes(18).toString("base64");
-    const nonceHtml = (html) =>
-      html.replace(/<script\b/g, `<script nonce="${nonce}"`);
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -185,7 +192,9 @@ export async function startServer({
         /^\/api\/projects\/([a-f0-9]{16})\/variants\/([a-f0-9]{16})\/export$/,
       );
       if (req.method === "GET" && exportPath) {
-        const { v } = store.variant(exportPath[1], exportPath[2]);
+        const { v } = store.variant(exportPath[1], exportPath[2], {
+          includeImages: false,
+        });
         return json(res, 200, await models.forExport(v.plan));
       }
       if (req.method === "GET" && path === "/api/settings")
@@ -395,13 +404,13 @@ export async function startServer({
         return json(res, 200, publicProject(store.get(m[1])));
       m = path.match(/^\/api\/projects\/([a-f0-9]{16})\/source$/);
       if (req.method === "GET" && m) {
-        const image = store.get(m[1]).image;
-        const source = image?.originalDataUrl?.match(imageData);
+        const original = store.originalImage(m[1]);
+        const source = original?.dataUrl?.match(imageData);
         if (!source)
           return json(res, 404, { error: "这个项目仅有用于描图的底图副本" });
         const extension = source[1] === "jpeg" ? "jpg" : source[1];
         const filename = encodeURIComponent(
-          (image.originalName || "floorplan." + extension).toWellFormed(),
+          (original.name || "floorplan." + extension).toWellFormed(),
         ).replaceAll("'", "%27");
         return res
           .writeHead(200, {
@@ -420,9 +429,11 @@ export async function startServer({
       if (req.method === "POST" && m) {
         const [, pid, vid, action] = m,
           b = await body(req);
-        const project = store.assertLifecycle(pid, b.lifecycle);
+        const project = store.assertLifecycle(pid, b.lifecycle, {
+          includeImages: false,
+        });
         if (action === "review") {
-          const { v } = store.variant(pid, vid);
+          const { v } = store.variant(pid, vid, { includeImages: false });
           if (v.revision !== b.revision) throw new Conflict();
           return json(
             res,
@@ -448,6 +459,7 @@ export async function startServer({
                 : "手动编辑",
               b.underlay,
               b.expectedUnderlayVersion,
+              { includeUnderlay: b.includeUnderlay !== false },
             ),
           );
         if (action === "copy")
@@ -463,13 +475,11 @@ export async function startServer({
           ]);
           return json(res, 200, { ok: true });
         }
-        const { v } = store.variant(pid, vid);
+        const { v } = store.variant(pid, vid, { includeImages: false });
         if (v.revision !== b.revision) throw new Conflict();
         const message = string(b.message, "需求", 6000);
         const oldMessages = v.messages;
-        store.addMessages(pid, vid, [
-          { role: "user", content: message, at: Date.now() },
-        ]);
+        const sentAt = Date.now();
         return stream(
           req,
           res,
@@ -487,15 +497,24 @@ export async function startServer({
               emit,
             });
             if (signal.aborted) throw new Error("已停止");
-            const latest = store.assertLifecycle(pid, project.lifecycle);
+            const latest = store.assertLifecycle(pid, project.lifecycle, {
+              includeImages: false,
+            });
             if (
-              JSON.stringify(latest.designPreferences) !==
-              JSON.stringify(project.designPreferences)
+              !isDeepStrictEqual(
+                latest.designPreferences,
+                project.designPreferences,
+              )
             )
               throw new Conflict("设计范围已变化，请按新的范围重新提出需求");
-            if (store.variant(pid, vid).v.revision !== b.revision)
-              throw new Conflict();
+            const latestVariant = latest.variants.find(
+              (variant) => variant.id === vid,
+            );
+            if (latestVariant?.revision !== b.revision) throw new Conflict();
+            if (!isDeepStrictEqual(latestVariant.messages, oldMessages))
+              throw new Conflict("对话已在其他窗口更新，请重新打开方案后再试");
             store.addMessages(pid, vid, [
+              { role: "user", content: message, at: sentAt },
               { role: "assistant", content: result.reply, at: Date.now() },
             ]);
             return { ...result, baseRevision: b.revision };
@@ -508,7 +527,7 @@ export async function startServer({
         const { p, v } = store.variant(m[1], m[2]);
         return res
           .writeHead(200, { "content-type": "text/html;charset=utf-8" })
-          .end(nonceHtml(editorHtml(p, v)));
+          .end(editorHtml(p, v, nonce));
       }
       const staticFiles = {
         "/": "index.html",
@@ -544,11 +563,7 @@ export async function startServer({
           content = readFileSync(new URL("public/" + name, base));
         return res
           .writeHead(200, { "content-type": type + ";charset=utf-8" })
-          .end(
-            type === "text/html"
-              ? nonceHtml(content.toString("utf8"))
-              : content,
-          );
+          .end(content);
       }
       return json(res, 404, { error: "找不到此页面" });
     } catch (error) {

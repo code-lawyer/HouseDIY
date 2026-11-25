@@ -23,6 +23,8 @@ const directory = resolve(process.env.HOUSEDIY_STARTUP_DIR || ".qa/packaged");
 mkdirSync(directory, { recursive: true });
 const data = mkdtempSync(join(directory, "data-"));
 const version = JSON.parse(readFileSync("package.json", "utf8")).version;
+const electronVersion = JSON.parse(readFileSync("package-lock.json", "utf8"))
+  .packages["node_modules/electron"].version;
 const executable = resolve(
   process.env.HOUSEDIY_PACKAGE_PATH ||
     `release/HouseDIY-${version}-portable.exe`,
@@ -125,6 +127,7 @@ try {
     const logo = header.querySelector("img");
     return {
       protocol: location.protocol,
+      electronVersion: navigator.userAgent.match(/\bElectron\/([\d.]+)/)?.[1],
       headerDisplay: getComputedStyle(header).display,
       headerHeight: header.getBoundingClientRect().height,
       fontFamily: getComputedStyle(document.body).fontFamily,
@@ -146,6 +149,8 @@ try {
     };
   });
   assert.equal(appearance.protocol, "http:");
+  assert.equal(appearance.electronVersion, electronVersion);
+  results.electronVersion = appearance.electronVersion;
   assert.equal(appearance.headerDisplay, "flex");
   assert.equal(appearance.headerHeight, 72);
   assert.equal(appearance.paper, "#f6f3ed");
