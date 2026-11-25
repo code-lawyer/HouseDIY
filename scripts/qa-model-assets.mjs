@@ -20,6 +20,7 @@ let app = await startServer({ dataDir });
 let browser;
 const checks = [],
   errors = [];
+let phase = "open the workspace";
 try {
   browser = await puppeteer.launch({
     executablePath:
@@ -38,24 +39,28 @@ try {
   });
   const page = await browser.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.setRequestInterception(true);
-  page.on("request", (request) =>
-    request.url().endsWith("/api/codex/status")
-      ? request.respond({
-          status: 200,
-          contentType: "application/json",
-          body: '{"available":false,"message":"离线验收"}',
-        })
-      : request.continue(),
-  );
   const appData = () => app.store.get(app.store.list()[0].id);
   const ready = () =>
     page.waitForFunction(
       () =>
         !document.querySelector("#editor-view").hidden &&
         document.querySelector("#editor-loading").hidden,
+      { polling: 100 },
     );
   const frame = async () => (await page.$("#designer")).contentFrame();
+  async function repairedFrame(previousSource) {
+    await page.waitForFunction(
+      (source) =>
+        document.querySelector("#designer").src !== source &&
+        document.querySelector("#editor-view").getAttribute("aria-busy") ===
+          "false" &&
+        document.querySelector("#model-feedback").hidden &&
+        document.querySelector("#editor-loading").hidden,
+      { polling: 100 },
+      previousSource,
+    );
+    return frame();
+  }
   async function openProject(projectId) {
     await page.goto(app.url);
     const card = '[data-project-id="' + projectId + '"] .project-card';
@@ -86,7 +91,7 @@ try {
         });
         return blue;
       },
-      { timeout: 30000 },
+      { polling: 100, timeout: 30000 },
       id,
     );
   }
@@ -137,6 +142,21 @@ try {
   assert.equal((await saved).status(), 200);
   await verifyRendered(editor, id);
   pass("import, place, render and save the original blue mesh");
+  const unrelatedShape = {
+    id: "excluded-shape",
+    name: "不属于当前设计的合成造型",
+    model: JSON.stringify({ parts: [] }),
+    w: 100,
+    d: 100,
+    h: 100,
+    color: "#eeeeee",
+  };
+  assert.ok(
+    await editor.evaluate(
+      (shape) => window.houseShapes.save([shape]),
+      unrelatedShape,
+    ),
+  );
   const oldOrigin = app.origin;
   await app.close();
   app = await startServer({ dataDir });
@@ -145,6 +165,12 @@ try {
   await verifyRendered(editor, id);
   await page.screenshot({ path: join(root, "model-reopened.png") });
   pass("fresh origin reopens the same mesh and instance");
+  assert.deepEqual(await editor.evaluate(() => window.houseShapes.items()), [
+    unrelatedShape,
+  ]);
+  pass(
+    "the reusable shape library survives a different workspace server origin",
+  );
 
   const downloads = mkdtempSync(join(root, "export-"));
   await (
@@ -171,18 +197,40 @@ try {
   );
   const placed = exported.plan.furniture.find((f) => f.modelId === id);
   pass("exported JSON contains the original GLB bytes");
-  await editor.click("[aria-controls=atelier-advanced]");
-  await editor.click("#exportMenu > button");
-  await editor.click('button[data-exp="share"]');
+  phase = "export the standalone share file";
+  const activate = async (target, selector) => {
+    const button = await target.waitForSelector(selector, { visible: true });
+    await button.evaluate((element) => element.click());
+    await button.dispose();
+  };
+  await activate(editor, "[aria-controls=atelier-advanced]");
+  await activate(editor, "#exportMenu > button");
+  await activate(editor, 'button[data-exp="share"]');
+  await editor.waitForSelector(".modal [data-ok]");
+  const packageContents = await editor.$eval(".modal", (el) => el.textContent);
+  assert.match(packageContents, /描图底图/);
+  assert.match(packageContents, /blue-tetrahedron/);
+  assert.doesNotMatch(packageContents, /不属于当前设计的合成造型/);
+  await activate(editor, ".modal [data-ok]");
   let sharedName;
   for (let i = 0; i < 120 && !sharedName; i++) {
     sharedName = readdirSync(downloads).find((name) => name.endsWith(".html"));
     if (!sharedName) await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.ok(sharedName, "The export menu produced a standalone HTML file");
+  const sharedFile = join(downloads, sharedName);
+  const exportedHtml = readFileSync(sharedFile, "utf8");
+  assert.match(exportedHtml, /Copyright .*ZWD11/i);
+  assert.match(exportedHtml, /Permission is hereby granted/);
+  assert.ok(!exportedHtml.includes(unrelatedShape.name));
+  // Release the sender's WebGL scene before the offline recipient starts its
+  // own scene. The recipient still runs in a clean browser context.
+  phase = "open the standalone file as an offline recipient";
+  await page.goto("about:blank");
   const recipient = await browser.createBrowserContext();
   try {
     const offline = await recipient.newPage();
+    await offline.bringToFront();
     const requests = [];
     offline.on("pageerror", (error) => errors.push(error.message));
     await offline.setRequestInterception(true);
@@ -196,10 +244,18 @@ try {
       }
       return request.continue();
     });
-    await offline.goto(pathToFileURL(join(downloads, sharedName)).href);
-    await offline.waitForSelector("#sbX", { visible: true });
-    await offline.click("#sbX");
-    await offline.click('#viewSeg [data-view="3d"]');
+    await offline.goto(pathToFileURL(sharedFile).href);
+    await offline.waitForFunction(
+      (modelId) =>
+        window.__designer?.app.plan.furniture.some(
+          (item) => item.modelId === modelId,
+        ),
+      { polling: 100, timeout: 60000 },
+      id,
+    );
+    await activate(offline, "#sbX");
+    phase = "render the embedded model in the offline recipient";
+    await activate(offline, '#viewSeg [data-view="3d"]');
     await verifyRendered(offline, id);
     const shared = await offline.evaluate(() => ({
       underlay: window.__designer.app.underlay,
@@ -207,17 +263,26 @@ try {
         "[data-housediy-desktop],#__preset",
       ).length,
       mesh: window.__SHARED__.models[0].b64,
+      library: window.__SHARED__.fmLib,
+      unknownWall: window.__wallStructureLabel({
+        bearing: null,
+        status: "existing",
+      }),
     }));
     assert.deepEqual(shared.underlay, underlay);
     assert.equal(shared.mesh, exported.models[0].b64);
     assert.equal(shared.desktopElements, 0);
+    assert.equal(shared.library, undefined);
+    assert.equal(shared.unknownWall, "承重待核实");
     assert.deepEqual(requests, []);
   } finally {
     await recipient.close();
+    await page.bringToFront();
   }
   pass(
     "standalone shared HTML renders the placed GLB and calibrated underlay offline without desktop resources",
   );
+  phase = "import the model into a new workspace";
   await app.close();
   app = await startServer({
     dataDir: mkdtempSync(join(root, "clean-workspace-")),
@@ -233,6 +298,7 @@ try {
   );
   pass("import into a clean workspace preserves geometry and placement");
 
+  phase = "repair a missing model";
   await app.close();
   app = await startServer({
     dataDir: mkdtempSync(join(root, "legacy-workspace-")),
@@ -243,18 +309,14 @@ try {
   });
   editor = await openProject(legacy.id);
   await page.waitForSelector("#model-feedback button", { visible: true });
+  const legacySource = await page.$eval("#designer", (el) => el.src);
   const restored = page.waitForResponse(
     (r) =>
       r.url().endsWith("/api/models/" + id) && r.request().method() === "PUT",
   );
   await (await page.$("#model-feedback input")).uploadFile(fixture);
   assert.equal((await restored).status(), 200);
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#model-feedback").hidden &&
-      document.querySelector("#editor-loading").hidden,
-  );
-  editor = await frame();
+  editor = await repairedFrame(legacySource);
   await verifyRendered(editor, id);
   assert.deepEqual(
     appData().variants[0].plan.furniture.find((f) => f.modelId === id),
@@ -262,6 +324,7 @@ try {
   );
   pass("repair a legacy missing file in place with the original ID");
 
+  phase = "repair a damaged model";
   const modelsDir = join(app.store.directory, "models");
   const damagedFile = join(modelsDir, "model-" + id + ".json"),
     fragment = '{"id":';
@@ -295,15 +358,11 @@ try {
         "false",
   );
   assert.equal(readFileSync(damagedFile, "utf8"), fragment);
+  const damagedSource = await page.$eval("#designer", (el) => el.src);
   const fixed = repairResponse();
   await (await page.$("#model-feedback input")).uploadFile(fixture);
   assert.equal((await fixed).status(), 200);
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#model-feedback").hidden &&
-      document.querySelector("#editor-loading").hidden,
-  );
-  editor = await frame();
+  editor = await repairedFrame(damagedSource);
   await verifyRendered(editor, id);
   const backups = readdirSync(modelsDir).filter((name) =>
     name.endsWith(".bak"),
@@ -319,6 +378,9 @@ try {
     "the damaged model rejects another GLB, backs up the fragment and recovers the original mesh",
   );
   assert.deepEqual(errors, []);
+} catch (error) {
+  console.error("Model acceptance phase", phase);
+  throw error;
 } finally {
   writeFileSync(
     join(root, "results.json"),

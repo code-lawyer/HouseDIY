@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import {
+  constants,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -84,9 +92,63 @@ function referencedIds(plan) {
     ),
   ];
 }
+export function projectModelIds(project) {
+  if (!Array.isArray(project.variants) || !project.variants.length) return null;
+  const ids = new Set();
+  for (const variant of project.variants) {
+    if (!variant || !Array.isArray(variant.history ?? [])) return null;
+    for (const entry of [variant, ...(variant.history ?? [])]) {
+      const plan = entry?.plan;
+      if (plan?.version !== 2 || !Array.isArray(plan.furniture)) return null;
+      for (const furniture of plan.furniture) {
+        if (typeof furniture?.key !== "string") return null;
+        const keyId = furniture.key.startsWith("model:")
+          ? furniture.key.slice(6)
+          : null;
+        for (const id of [
+          furniture.modelId === "" ? null : furniture.modelId,
+          keyId,
+        ]) {
+          if (id == null) continue;
+          if (!validId(id)) return null;
+          ids.add(id);
+        }
+      }
+    }
+  }
+  return ids;
+}
 export function createModelLibrary(workspace) {
   const directory = resolve(workspace, "models"),
-    shelf = join(directory, "library");
+    shelf = join(directory, "library"),
+    cleanup = join(directory, "pending-cleanup.json");
+  function pendingCleanup() {
+    try {
+      const queue = JSON.parse(readFileSync(cleanup, "utf8"));
+      if (!Array.isArray(queue) || !queue.every(validId)) throw invalid();
+      return queue;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      return [];
+    }
+  }
+  function saveCleanup(ids) {
+    mkdirSync(directory, { recursive: true });
+    const temp = join(directory, randomUUID() + ".tmp");
+    try {
+      writeFileSync(temp, JSON.stringify([...ids]), {
+        flag: "wx",
+        flush: true,
+      });
+      renameSync(temp, cleanup);
+    } finally {
+      try {
+        unlinkSync(temp);
+      } catch {
+        /* The normal rename removes this path. */
+      }
+    }
+  }
   const pathFor = (root, id) => {
     if (!validId(id)) throw invalid();
     return join(root, "model-" + id + ".json");
@@ -237,6 +299,44 @@ export function createModelLibrary(workspace) {
       await unlink(pathFor(shelf, id)).catch((error) => {
         if (error.code !== "ENOENT") throw error;
       });
+    },
+    queueCleanup(candidates) {
+      if (candidates.size)
+        saveCleanup(new Set([...pendingCleanup(), ...candidates]));
+    },
+    pruneUnreferenced(references) {
+      const queued = new Set(pendingCleanup());
+      if (!queued.size) return 0;
+      const referenced = references();
+      if (!referenced) return queued.size;
+      const deferred = new Set();
+      for (const id of queued) {
+        const file = pathFor(directory, id);
+        if (referenced.has(id)) continue;
+        if (writes.has(file)) {
+          deferred.add(id);
+          continue;
+        }
+        try {
+          if (lstatSync(pathFor(shelf, id), { throwIfNoEntry: false }))
+            continue;
+          const stat = lstatSync(file, { throwIfNoEntry: false });
+          if (!stat) continue;
+          if (
+            !stat.isFile() ||
+            JSON.parse(readFileSync(file, "utf8"))?.id !== id
+          ) {
+            deferred.add(id);
+            continue;
+          }
+          unlinkSync(file);
+        } catch {
+          // Retry when we can verify the record or the OS releases its lock.
+          deferred.add(id);
+        }
+      }
+      if (deferred.size !== queued.size) saveCleanup(deferred);
+      return deferred.size;
     },
     async forExport(plan) {
       const ids = referencedIds(plan);

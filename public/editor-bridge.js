@@ -1,13 +1,10 @@
 window.addEventListener("DOMContentLoaded", async () => {
   if (parent === window) return;
-  const {
-    requireDesignReview,
-    designFindings,
-    mergeDesignFindings,
-    wallStructure,
-  } = await import("/design-rules.js");
+  const { requireDesignReview, designFindings, mergeDesignFindings } =
+    await import("/design-rules.js");
   const D = window.__designer,
     meta = window.__HOUSEDIY__,
+    structureLabel = window.__wallStructureLabel,
     post = (data) =>
       parent.postMessage(
         { source: "housediy-editor", ...meta, ...data },
@@ -20,35 +17,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     const { openingRecovery } = await import("/editor-recovery.js");
     const recovery = openingRecovery(D, post);
-    const structureLabel = (wall) =>
-      ({ bearing: "承重墙", unknown: "承重待核实", partition: "非承重墙" })[
-        wallStructure(wall)
-      ];
-    window.__wallStructureLabel = structureLabel;
-    window.__wallStructure = wallStructure;
-    const inspector = document.getElementById("inspector");
-    new MutationObserver(() => {
-      const checkbox = inspector.querySelector("#wBear");
-      if (!checkbox || D.app.sel.kind !== "wall") return;
-      const wall = D.app.plan.walls.find((w) => w.id === D.app.sel.id);
-      if (!wall) return;
-      const select = document.createElement("select");
-      select.setAttribute("aria-label", "结构图标注的承重属性");
-      for (const [value, label] of [
-        ["unknown", "承重待核实"],
-        ["bearing", "承重墙"],
-        ["partition", "已核实非承重墙"],
-      ])
-        select.add(new Option(label, value));
-      select.value = wallStructure(wall);
-      select.onchange = () => {
-        wall.bearing =
-          select.value === "unknown" ? null : select.value === "bearing";
-        wall.bearingFrom = select.value === "unknown" ? "inferred" : "drawing";
-        D.commit();
-      };
-      checkbox.parentElement.replaceChildren("结构图标注", select);
-    }).observe(inspector, { childList: true, subtree: true });
     await window.__houseModelsReady;
     // Upstream initializes its undo baseline from the supplied preset plan.
     // Replacing again here would create a spurious first undo step.
@@ -181,14 +149,15 @@ window.addEventListener("DOMContentLoaded", async () => {
         } else if (action === "checks")
           result = { issues: checks(payload?.preferences) };
         else if (action === "view") {
-          await settleView();
-          await D.setView(payload);
-          await settleView();
+          if (payload === "2d") await D.setView("2d", true);
+          else {
+            await settleView();
+            await D.setView(payload);
+            await settleView();
+          }
           result = { ok: true };
         } else if (action === "sourceTool" || action === "prepareOpening") {
-          await settleView();
-          await D.setView("2d");
-          await settleView();
+          await D.setView("2d", true);
           if (D.app.underlay && !D.app.underlay.visible) {
             D.app.underlay.visible = true;
             D.emit("underlay");
@@ -314,16 +283,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         await settleView();
         D.fitOverview();
       } catch {
-        D.app.transitioning = false;
-        try {
-          await D.setView("2d");
-        } catch {
-          D.app.view = "2d";
-          D.app.transitioning = false;
-          document.getElementById("stage").dataset.view = "2d";
-          for (const b of document.querySelectorAll("#viewSeg [data-view]"))
-            b.classList.toggle("on", b.dataset.view === "2d");
-        }
+        await D.setView("2d", true);
         D.fit2D();
         D.requestDraw();
         viewWarning = "3D 视图未能打开，已保留二维编辑。可再次点击「3D」重试。";

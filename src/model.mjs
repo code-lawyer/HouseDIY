@@ -739,9 +739,16 @@ function recognizedStructure(data, image, options) {
       if (!w) throw new Error("原图标注的所属墙未能识别");
       const a = p.nodes.find((n) => n.id === w.a),
         b = p.nodes.find((n) => n.id === w.b);
+      const [x, y] = px(source.pixel);
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
+      const distance =
+        Math.abs((x - a.x) * (b.y - a.y) - (y - a.y) * (b.x - a.x)) / length;
+      const markingTolerance = Math.min(180, Math.max(50, 2 * scale));
+      if (distance > w.t / 2 + markingTolerance)
+        throw new Error("门窗中心离模型指定的墙过远");
       item.wall = w.id;
-      item.pos = Math.round(projectAlongWall(a, b, ...px(source.pixel)));
-      validateOpening(item, Math.hypot(b.x - a.x, b.y - a.y), height);
+      item.pos = Math.round(projectAlongWall(a, b, x, y));
+      validateOpening(item, length, height);
       p.openings.push(item);
     } catch (error) {
       deferOpening(item, error.message);
@@ -895,6 +902,7 @@ export function fromRecognition(data, image, options = {}) {
         if (!plan.furniture.length) throw new Error(reason);
         schemeIssues.push(`第 ${index + 1} 套方案有 ${reason}`);
       }
+      if (!plan.furniture.length) throw new Error("家具尚未布置");
       const valid = validatePlan(plan);
       const layout = JSON.stringify(
         valid.furniture
@@ -906,16 +914,15 @@ export function fromRecognition(data, image, options = {}) {
               f.w,
               f.d,
               f.h,
-              f.rot ?? 0,
+              (((f.rot ?? 0) % 360) + 360) % 360,
               f.z ?? 0,
-              f.color,
             ]),
           )
           .sort(),
       );
       if (layouts.has(layout)) {
         schemeIssues.push(
-          `第 ${index + 1} 套方案的家具布置和配色与另一套完全相同。`,
+          `第 ${index + 1} 套方案的家具布置与另一套完全相同。请调整实际摆放。`,
         );
         continue;
       }

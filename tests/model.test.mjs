@@ -147,6 +147,53 @@ test("an opening crossing a T junction is repairable and a single wall can form 
   assert.equal(partial.variants[0].plan.walls.length, 1);
   assert.ok(partial.underlay.mmPerPx > 0);
 });
+test("a door far from its claimed wall stays marked for manual placement", () => {
+  const drawing = structuredClone(recognition);
+  drawing.openings[0] = {
+    wall: 0,
+    center: [300, 380],
+    type: "door",
+    width: 900,
+  };
+  const { plan } = fromRecognition(drawing, { width: 600, height: 450 })
+    .variants[0];
+  assert.equal(plan.openings.length, 0);
+  assert.deepEqual(plan.pendingOpenings[0].pixel, [300, 380]);
+});
+
+test("a layout retry cannot replace already stored walls and openings", async () => {
+  const first = structuredClone(recognition);
+  first.schemes.length = 1;
+  const second = structuredClone(recognition);
+  second.walls.pop();
+  second.openings = [];
+  second.schemes[1].furniture[0].at[1] += 50;
+  const responses = [first, second];
+  const result = await recognize({
+    image: { width: 600, height: 450 },
+    options: { schemeCount: 2, height: 2800 },
+    settings: { provider: "agent" },
+    completeAgent: async () => responses.shift(),
+  });
+  assert.equal(responses.length, 0);
+  for (const { plan } of result.variants) {
+    assert.equal(plan.walls.length, 4);
+    assert.equal(plan.openings.length, 1);
+  }
+});
+
+test("empty and recolored copies do not count as distinct furniture layouts", () => {
+  const drawing = structuredClone(recognition);
+  drawing.schemes[1].furniture[0].at = [...drawing.schemes[0].furniture[0].at];
+  drawing.schemes[2].furniture = [];
+  const result = fromRecognition(
+    drawing,
+    { width: 600, height: 450 },
+    { schemeCount: 3 },
+  );
+  assert.equal(result.generatedSchemeCount, 1);
+  assert.equal(result.variants.length, 1);
+});
 test("known wall lines survive uncertain thickness and alternate numeric notation", () => {
   const data = structuredClone(recognition);
   data.scale.mmPerPixel = "10";
@@ -181,8 +228,8 @@ test("a retry cannot erase an unresolved door just by omitting it", async () => 
   const result = await recognize({
     image: { width: 600, height: 450 },
     options: { schemeCount: 1 },
-    settings: { provider: "codex" },
-    completeCodex: async () => responses.shift(),
+    settings: { provider: "agent" },
+    completeAgent: async () => responses.shift(),
   });
   assert.equal(result.variants[0].plan.pendingOpenings.length, 1);
 });
@@ -202,7 +249,7 @@ test("user span calibrates the wall extents and underlay at each requested schem
     const underlay = result.underlay;
     assert.equal(underlay.mmPerPx, (widthMeters * 1000) / 560);
     assert.match(result.assumptions[0], /5\.6 米.*有差异/);
-    for (const { plan } of result.variants) {
+    for (const [index, { plan }] of result.variants.entries()) {
       const xs = plan.nodes.map((n) => n.x);
       assert.equal(Math.max(...xs) - Math.min(...xs), widthMeters * 1000);
       const world = ([x, y]) => [
@@ -212,7 +259,7 @@ test("user span calibrates the wall extents and underlay at each requested schem
       assert.deepEqual([plan.nodes[0].x, plan.nodes[0].y], world([20, 20]));
       assert.deepEqual(
         [plan.furniture[0].x, plan.furniture[0].y],
-        world([420, 220]),
+        world([420, 220 + 15 * index]),
       );
       assert.deepEqual(plan.walls, result.variants[0].plan.walls);
     }
@@ -233,9 +280,9 @@ test("recognition retries incomplete schemes and retains usable results if still
     const prompts = [];
     const args = {
       image: { width: 600, height: 450 },
-      settings: { provider: "codex" },
+      settings: { provider: "agent" },
       options: { schemeCount: 2, height: 2800 },
-      completeCodex: async (_settings, prompt) => {
+      completeAgent: async (_settings, prompt) => {
         prompts.push(prompt);
         return prompts.length === 1 ? wrong : recognition;
       },
@@ -247,7 +294,7 @@ test("recognition retries incomplete schemes and retains usable results if still
     assert.match(prompts[1], problem === "few" ? /只返回 1 套/ : /完全相同/);
     const draft = await recognize({
       ...args,
-      completeCodex: async () => wrong,
+      completeAgent: async () => wrong,
     });
     assert.equal(draft.draftStatus, "partial");
     assert.deepEqual(
@@ -268,9 +315,9 @@ test("recognition preserves the walls and original image if all furniture layout
   };
   const result = await recognize({
     image,
-    settings: { provider: "codex" },
+    settings: { provider: "agent" },
     options: { schemeCount: 1, height: 2800 },
-    completeCodex: async () => broken,
+    completeAgent: async () => broken,
   });
   assert.equal(result.draftStatus, "partial");
   const [variant] = result.variants;
@@ -289,7 +336,7 @@ test("a failed retry keeps the first usable recognition while a cancelled retry 
   };
   const args = {
     image: { width: 600, height: 450 },
-    settings: { provider: "codex" },
+    settings: { provider: "agent" },
     options: { schemeCount: 2, height: 2800 },
   };
   for (const cancel of [false, true]) {
@@ -298,7 +345,7 @@ test("a failed retry keeps the first usable recognition while a cancelled retry 
     const request = recognize({
       ...args,
       signal: controller.signal,
-      completeCodex: async () => {
+      completeAgent: async () => {
         if (++requests === 1) return incomplete;
         if (cancel) controller.abort();
         throw new Error("模型响应超时");

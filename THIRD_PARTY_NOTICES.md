@@ -65,11 +65,11 @@ Electron is MIT licensed. The packaged runtime includes Electron's `LICENSE.elec
 and `LICENSES.chromium.html`, which contain its own and Chromium dependency
 notices. Development and packaging dependencies are recorded in `package-lock.json`.
 
-## Codex CLI
+## Local agent CLIs
 
-HouseDIY invokes a separately installed official Codex CLI. No CLI executable,
-authentication files, account tokens or model weights are bundled. Codex CLI:
-https://github.com/openai/codex (Apache-2.0). Model service access is provided by
-the user's own account and is subject to that service's terms and limits.
-
-HouseDIY is an independent project, not an official OpenAI or upstream editor product.
+HouseDIY can invoke a separately installed Codex CLI, Claude Code CLI or Gemini
+CLI. The user installs and signs in to their chosen CLI in a terminal.
+Distribution covers the HouseDIY adapters. Service terms and limits apply to
+each account. [Codex](https://github.com/openai/codex) ·
+[Claude Code](https://code.claude.com/docs/en/cli-reference) ·
+[Gemini CLI](https://github.com/google-gemini/gemini-cli)

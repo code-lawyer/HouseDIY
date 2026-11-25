@@ -4,14 +4,25 @@ import { readFileSync } from "node:fs";
 import { once } from "node:events";
 import { createStore, Conflict } from "./store.mjs";
 import { chat, testConnection, recognize } from "./ai.mjs";
-import { codexStatus, codexLogin } from "./codex.mjs";
+import { agentStatus } from "./agents.mjs";
 import { string, number, validatePlan } from "./model.mjs";
 import { requireDesignReview } from "./design-rules.mjs";
 
 import { editorHtml } from "./editor-template.mjs";
 import { createModelLibrary, maxPlanFileBytes } from "./model-assets.mjs";
+import { createShapeLibrary } from "./shape-library.mjs";
 
 const base = new URL("../", import.meta.url);
+const originalImageLimit = 40_000_000;
+const imageData = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/;
+function publicProject(project) {
+  if (!project.image?.originalDataUrl) return project;
+  const { originalDataUrl, ...image } = project.image;
+  return {
+    ...project,
+    image: { ...image, originalAvailable: !!originalDataUrl },
+  };
+}
 export async function startServer({
   dataDir,
   secretCodec,
@@ -20,9 +31,22 @@ export async function startServer({
 } = {}) {
   const store = createStore(dataDir, secretCodec);
   const models = createModelLibrary(store.directory);
+  const shapes = createShapeLibrary(store.directory);
   store.ensureDemo(seedFile);
+  try {
+    models.pruneUnreferenced(store.referencedModels);
+  } catch {
+    // Preserve an unreadable cleanup queue and keep the projects accessible.
+  }
   const token = randomBytes(32).toString("hex");
   let origin;
+  // Cover the gap between writing attachment bytes and saving their project or library entry.
+  let modelChanges = Promise.resolve();
+  function withModelChanges(task) {
+    const result = modelChanges.then(task);
+    modelChanges = result.catch(() => {});
+    return result;
+  }
   const projectRequests = new Map();
   const json = (res, status, data) =>
     res
@@ -136,17 +160,24 @@ export async function startServer({
       const path = url.pathname;
       if (req.method === "GET" && path === "/api/models")
         return json(res, 200, await models.list());
+      if (path === "/api/shapes") {
+        if (req.method === "GET") return json(res, 200, shapes.read());
+        if (req.method === "POST")
+          return json(res, 200, shapes.replace(await body(req, 4_000_000)));
+      }
       const modelPath = path.match(/^\/api\/models\/([a-z0-9_-]{1,80})$/);
       if (modelPath) {
         const id = modelPath[1];
         if (req.method === "GET") return json(res, 200, await models.read(id));
         if (req.method === "PUT") {
           const input = await body(req, maxPlanFileBytes);
-          await models.put(id, input, { repair: input?.repair === true });
+          await withModelChanges(() =>
+            models.put(id, input, { repair: input?.repair === true }),
+          );
           return json(res, 200, { ok: true });
         }
         if (req.method === "DELETE") {
-          await models.remove(id);
+          await withModelChanges(() => models.remove(id));
           return json(res, 200, { ok: true });
         }
       }
@@ -173,13 +204,15 @@ export async function startServer({
           message: (r.reply ?? "已连接").slice(0, 120),
         });
       }
-      if (req.method === "GET" && path === "/api/codex/status")
-        return json(res, 200, await codexStatus(store.publicSettings()));
-      if (req.method === "POST" && path === "/api/codex/login") {
-        await body(req);
-        return stream(req, res, async (signal, emit) => ({
-          status: await codexLogin(store.publicSettings(), { signal, emit }),
-        }));
+      if (req.method === "POST" && path === "/api/agent/status") {
+        const input = await body(req);
+        const controller = new AbortController();
+        res.on("close", () => controller.abort());
+        return json(
+          res,
+          200,
+          await agentStatus(input.agent, input.config, controller.signal),
+        );
       }
       if (
         req.method === "GET" &&
@@ -190,6 +223,30 @@ export async function startServer({
         const catalog = store.catalog(deleted, withDiagnostics && !deleted);
         return json(res, 200, withDiagnostics ? catalog : catalog.projects);
       }
+      if (req.method === "POST" && path === "/api/trash/purge") {
+        const input = await body(req);
+        const result = await withModelChanges(() => {
+          const counts = store.purgeTrash(input?.projects, (modelIds) => {
+            try {
+              models.queueCleanup(modelIds);
+            } catch {
+              throw new Error(
+                "无法记录附件清理，请检查工作区权限和清理记录，再重试永久删除。",
+              );
+            }
+          });
+          // Project mutations cannot interleave with the synchronous reference check and pruning.
+          try {
+            const cleanupDeferred = models.pruneUnreferenced(
+              store.referencedModels,
+            );
+            return { ...counts, ...(cleanupDeferred && { cleanupDeferred }) };
+          } catch {
+            return { ...counts, cleanupQueueError: true };
+          }
+        });
+        return json(res, 200, result);
+      }
       const projectAction = path.match(
         /^\/api\/projects\/([a-f0-9]{16})\/(trash|restore|preferences)$/,
       );
@@ -197,7 +254,7 @@ export async function startServer({
         const [, pid, action] = projectAction,
           b = await body(req);
         if (action === "restore")
-          return json(res, 200, store.restore(pid, b.lifecycle));
+          return json(res, 200, publicProject(store.restore(pid, b.lifecycle)));
         if (action === "preferences")
           return json(res, 200, store.setDesignPreferences(pid, b));
         const result = store.trash(pid, b.lifecycle);
@@ -208,21 +265,20 @@ export async function startServer({
       if (req.method === "POST" && path === "/api/import") {
         const b = await body(req, maxPlanFileBytes + 4096),
           plan = validatePlan(b.plan?.plan ?? b.plan);
-        await models.importFor(plan, b.plan?.models);
-        return json(
-          res,
-          200,
-          store.create({
+        const project = await withModelChanges(async () => {
+          await models.importFor(plan, b.plan?.models);
+          return store.create({
             name: b.name || plan.name,
             variants: [
               { name: plan.name, plan, description: "从方案文件导入" },
             ],
             assumptions: ["已导入已有模型，尺寸与承重信息以原方案为准。"],
-          }),
-        );
+          });
+        });
+        return json(res, 200, project);
       }
       if (req.method === "POST" && path === "/api/generate") {
-        const b = await body(req);
+        const b = await body(req, 46_000_000);
         let source;
         if (b.projectId) {
           source = store.assertLifecycle(b.projectId, b.lifecycle);
@@ -243,11 +299,18 @@ export async function startServer({
           const image = b.image;
           if (
             !image ||
-            !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(
-              image.dataUrl ?? "",
-            )
+            typeof image.dataUrl !== "string" ||
+            image.dataUrl.length > 5_000_000 ||
+            !imageData.test(image.dataUrl)
           )
             throw new Error("请上传 PNG、JPG 或 WebP 户型图");
+          if (
+            image.originalDataUrl != null &&
+            (typeof image.originalDataUrl !== "string" ||
+              image.originalDataUrl.length > originalImageLimit + 32 ||
+              !imageData.test(image.originalDataUrl))
+          )
+            throw new Error("原始图片必须是 30 MB 以内的 PNG、JPG 或 WebP");
           number(image.width, "图片宽度", 1, 2400);
           number(image.height, "图片高度", 1, 2400);
           const schemeCount = number(b.schemeCount ?? 3, "方案数量", 1, 3);
@@ -268,6 +331,13 @@ export async function startServer({
               dataUrl: image.dataUrl,
               width: image.width,
               height: image.height,
+              ...(image.originalDataUrl && {
+                originalDataUrl: image.originalDataUrl,
+                originalName:
+                  typeof image.originalName === "string"
+                    ? image.originalName.slice(0, 200)
+                    : "",
+              }),
             },
             options,
           );
@@ -321,7 +391,29 @@ export async function startServer({
         );
       }
       let m = path.match(/^\/api\/projects\/([a-f0-9]{16})$/);
-      if (req.method === "GET" && m) return json(res, 200, store.get(m[1]));
+      if (req.method === "GET" && m)
+        return json(res, 200, publicProject(store.get(m[1])));
+      m = path.match(/^\/api\/projects\/([a-f0-9]{16})\/source$/);
+      if (req.method === "GET" && m) {
+        const image = store.get(m[1]).image;
+        const source = image?.originalDataUrl?.match(imageData);
+        if (!source)
+          return json(res, 404, { error: "这个项目仅有用于描图的底图副本" });
+        const extension = source[1] === "jpeg" ? "jpg" : source[1];
+        const filename = encodeURIComponent(
+          (image.originalName || "floorplan." + extension).toWellFormed(),
+        ).replaceAll("'", "%27");
+        return res
+          .writeHead(200, {
+            "Content-Type": "image/" + source[1],
+            "Content-Disposition":
+              'attachment; filename="floorplan.' +
+              extension +
+              "\"; filename*=UTF-8''" +
+              filename,
+          })
+          .end(Buffer.from(source[2], "base64"));
+      }
       m = path.match(
         /^\/api\/projects\/([a-f0-9]{16})\/variants\/([a-f0-9]{16})\/(save|chat|copy|note|review)$/,
       );
@@ -432,6 +524,7 @@ export async function startServer({
         "/editor-workspace.js": "editor-workspace.js",
         "/editor-bridge.js": "editor-bridge.js",
         "/editor-models.js": "editor-models.js",
+        "/editor-shapes.js": "editor-shapes.js",
         "/logo.svg": "logo.svg",
         "/fonts/noto-sans-sc.ttf": "fonts/noto-sans-sc.ttf",
       };

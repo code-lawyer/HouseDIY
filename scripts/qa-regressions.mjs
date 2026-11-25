@@ -72,18 +72,6 @@ try {
     held,
     onHeld;
   page.on("request", (request) => {
-    if (request.url().endsWith("/api/codex/status"))
-      return request.respond({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          available: true,
-          loggedIn: true,
-          message: "已登录，可以直接使用",
-          version: "界面验收模拟状态",
-          account: "",
-        }),
-      });
     if (request.url().endsWith("/save") && holdSave) {
       holdSave = false;
       held = request;
@@ -124,9 +112,11 @@ try {
         (window.__designer?.S3.ready || window.__designer.app.view === "2d") &&
         !window.__designer.app.transitioning &&
         !window.__designer.S3.isAnimating(),
+      { timeout: 90000, polling: 100 },
     );
     await page.waitForFunction(
       () => document.querySelector("#save-status").textContent === "已保存",
+      { polling: 100 },
     );
     return frame;
   };
@@ -150,20 +140,34 @@ try {
     return ready();
   };
   const home = async () => {
+    await page.waitForFunction(
+      () => !document.querySelector("#home-button").disabled,
+      { polling: 100 },
+    );
     await page.click("#home-button");
     await page.waitForFunction(
       () =>
         !document.querySelector("#home-view").hidden &&
         !document.querySelector("#home-button").disabled,
+      { polling: 100 },
     );
     await page.waitForSelector(".project-card");
   };
   const send = async (text) => {
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#editor-view").getAttribute("aria-busy") ===
+          "false" && !document.querySelector("#chat-input").disabled,
+      { polling: 100 },
+    );
     await page.type("#chat-input", text);
     await page.click("#send-chat");
   };
   const chatDone = () =>
-    page.waitForFunction(() => !document.querySelector("#send-chat").hidden);
+    page.waitForFunction(() => !document.querySelector("#send-chat").hidden, {
+      timeout: 90000,
+      polling: 100,
+    });
   const pose = (frame) =>
     frame.evaluate(() => {
       const d = window.__designer,
@@ -634,9 +638,17 @@ try {
   await page.click("#generate-button");
   frame = await ready();
   assert.equal(await page.$$eval("#variant-select option", (e) => e.length), 3);
+  // Exercise the drawing tool with a 3D transition that has stopped advancing.
+  await frame.evaluate(() => (window.__designer.app.transitioning = true));
   await page.click("#show-underlay");
   await frame.waitForFunction(
-    () => window.__designer.app.underlay?.visible === true,
+    () => {
+      const state = window.__designer.app;
+      return (
+        state.view === "2d" && !state.transitioning && state.underlay?.visible
+      );
+    },
+    { polling: 100 },
   );
   await frame.evaluate(() => {
     const d = window.__designer;
@@ -1020,7 +1032,13 @@ try {
     "Chat collapse restores keyboard focus and exposes the correct expanded state",
   );
   await page.click("#settings-button");
-  await page.select("#model-provider", "codex");
+  await page.select("#model-provider", "agent");
+  assert.deepEqual(
+    await page.$$eval("#agent-kind option", (items) =>
+      items.map((item) => item.value),
+    ),
+    ["codex", "claude", "gemini"],
+  );
   await shot("settings-codex");
   await page.select("#model-provider", "api");
   await shot("settings-api");
@@ -1074,8 +1092,18 @@ try {
 } catch (error) {
   if (browser) {
     const pages = await browser.pages();
-    await pages
-      .at(-1)
+    const failedPage = pages.at(-1);
+    measurements.failure = await failedPage
+      ?.evaluate(() => ({
+        toast: document.querySelector("#toast")?.textContent,
+        busy: document.querySelector("#editor-view")?.getAttribute("aria-busy"),
+        progress: document.querySelector("#chat-progress")?.textContent,
+        lastChat: document.querySelector("#messages .message:last-child")
+          ?.textContent,
+      }))
+      .catch(() => null);
+    console.error("Editor state on failure", measurements.failure);
+    await failedPage
       ?.screenshot({ path: join(directory, "failure.png") })
       .catch(() => {});
   }

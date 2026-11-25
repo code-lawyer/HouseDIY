@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
@@ -9,6 +10,7 @@ import {
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { startServer } from "../src/server.mjs";
+import { createModelLibrary } from "../src/model-assets.mjs";
 import { mockProvider, recognition } from "./mock-provider.mjs";
 mkdirSync(resolve(".qa"), { recursive: true });
 async function setup(t) {
@@ -74,6 +76,35 @@ test("external API edits return validated proposals and never mutate before appl
   assert.equal(mock.requests[0].model, "test");
   assert.ok(mock.requests[0].tools.length);
 });
+test("image import stores the original bytes separately from the model input", async (t) => {
+  const { req, mock } = await setup(t);
+  const original = Buffer.from("original-fixture-bytes");
+  const preview = "data:image/jpeg;base64,AA==";
+  const r = await req("/api/generate", {
+    image: {
+      width: 600,
+      height: 450,
+      dataUrl: preview,
+      originalDataUrl: "data:image/png;base64," + original.toString("base64"),
+      originalName: "原始户型.png",
+    },
+    name: "原图验收",
+    schemeCount: 1,
+  });
+  const text = await r.text();
+  const source = text.match(/"projectId":"([a-f0-9]{16})"/)?.[1];
+  assert.ok(source);
+  const project = await (await req("/api/projects/" + source)).json();
+  assert.equal(project.image.originalAvailable, true);
+  assert.equal(project.image.originalDataUrl, undefined);
+  const download = await req("/api/projects/" + source + "/source");
+  assert.equal(download.headers.get("Content-Type"), "image/png");
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), original);
+  assert.equal(mock.requests[0].messages[1].content[1].image_url.url, preview);
+  assert.ok(
+    !JSON.stringify(mock.requests).includes(original.toString("base64")),
+  );
+});
 test("a damaged project can be identified without breaking healthy projects or trash", async (t) => {
   const { app, req } = await setup(t);
   const active = app.store.get(app.store.list()[0].id);
@@ -107,6 +138,225 @@ test("a damaged project can be identified without breaking healthy projects or t
   assert.match((await broken.json()).error, /workspace\/projects/);
   assert.equal((await req("/api/projects/" + active.id)).status, 200);
   assert.equal(readFileSync(path, "utf8"), "{");
+});
+test("permanent deletion requires a current trash entry and prevents stale saves", async (t) => {
+  const { app, req } = await setup(t);
+  const project = app.store.get(app.store.list()[0].id);
+  const path = join(app.store.directory, "projects", project.id + ".json");
+  const purge = (lifecycle) =>
+    req("/api/trash/purge", { projects: [{ id: project.id, lifecycle }] });
+
+  assert.equal((await purge(project.lifecycle)).status, 409);
+  const trash = `/api/projects/${project.id}/trash`;
+  const restore = `/api/projects/${project.id}/restore`;
+  assert.equal(
+    (await req(trash, { lifecycle: project.lifecycle })).status,
+    200,
+  );
+  const [previous] = app.store.listTrash();
+  const restored = await req(restore, { lifecycle: previous.lifecycle });
+  assert.equal(restored.status, 200);
+  assert.equal(
+    (await req(trash, { lifecycle: (await restored.json()).lifecycle })).status,
+    200,
+  );
+  assert.equal((await purge(previous.lifecycle)).status, 409);
+  assert.ok(existsSync(path));
+
+  const [current] = app.store.listTrash();
+  const response = await purge(current.lifecycle);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { deletedCount: 1, failedCount: 0 });
+  assert.equal(existsSync(path), false);
+  assert.deepEqual(app.store.listTrash(), []);
+  assert.equal(
+    (await req(restore, { lifecycle: current.lifecycle })).status,
+    409,
+  );
+  assert.throws(() => app.store.save(project), /项目不存在/);
+  assert.equal(existsSync(path), false);
+});
+test("clearing trash deletes the confirmed files, including legacy projects", async (t) => {
+  const { app, req } = await setup(t);
+  const active = app.store.get(app.store.list()[0].id);
+  const pathFor = (id) => join(app.store.directory, "projects", id + ".json");
+  const addTrashed = (name) => {
+    const project = app.store.create({ name, variants: active.variants });
+    app.store.trash(project.id, project.lifecycle);
+    return project;
+  };
+  const first = addTrashed("确认清空的旧项目");
+  const second = addTrashed("确认清空的项目");
+  const legacy = JSON.parse(readFileSync(pathFor(first.id), "utf8"));
+  delete legacy.lifecycle;
+  writeFileSync(pathFor(first.id), JSON.stringify(legacy));
+
+  const confirmed = (await (await req("/api/trash")).json()).map(
+    ({ id, lifecycle }) => ({ id, lifecycle }),
+  );
+  const late = addTrashed("确认后才移入回收站");
+  const brokenPath = pathFor("0000000000000000");
+  writeFileSync(brokenPath, "{");
+  const purge = (projects) => req("/api/trash/purge", { projects });
+  assert.equal((await purge([confirmed[0], confirmed[0]])).status, 400);
+  assert.equal(
+    (
+      await purge([
+        ...confirmed,
+        { id: active.id, lifecycle: active.lifecycle },
+      ])
+    ).status,
+    409,
+  );
+  assert.ok(existsSync(pathFor(first.id)));
+  assert.ok(existsSync(pathFor(second.id)));
+
+  const response = await purge(confirmed);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { deletedCount: 2, failedCount: 0 });
+  assert.equal(existsSync(pathFor(first.id)), false);
+  assert.equal(existsSync(pathFor(second.id)), false);
+  assert.deepEqual(app.store.get(active.id), active);
+  assert.deepEqual(
+    app.store.listTrash().map(({ id }) => id),
+    [late.id],
+  );
+  assert.equal(readFileSync(brokenPath, "utf8"), "{");
+});
+test("trash includes damaged projects only when their deletion state is verifiable", async (t) => {
+  const { app, req } = await setup(t);
+  const sample = app.store.get(app.store.list()[0].id);
+  const project = app.store.create({
+    name: "方案损坏的回收站项目",
+    variants: sample.variants,
+  });
+  app.store.trash(project.id, project.lifecycle);
+  const file = join(app.store.directory, "projects", project.id + ".json");
+  const damaged = JSON.parse(readFileSync(file, "utf8"));
+  damaged.variants[0].plan = null;
+  writeFileSync(file, JSON.stringify(damaged));
+
+  const uncertainId = "0000000000000000";
+  const uncertainFile = join(
+    app.store.directory,
+    "projects",
+    uncertainId + ".json",
+  );
+  const uncertain = JSON.stringify({
+    ...damaged,
+    id: uncertainId,
+    deletedAt: "unknown",
+  });
+  writeFileSync(uncertainFile, uncertain);
+  const status = { id: project.id, lifecycle: damaged.lifecycle };
+  const { projects, unreadable } = await (
+    await req("/api/trash?diagnostics=1")
+  ).json();
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0].id, project.id);
+  assert.equal(projects[0].damaged, true);
+  assert.deepEqual(
+    unreadable.map(({ file }) => file),
+    [uncertainId + ".json"],
+  );
+  assert.equal(
+    (await req(`/api/projects/${project.id}/restore`, status)).status,
+    422,
+  );
+  const purge = (projects) => req("/api/trash/purge", { projects });
+  assert.equal((await purge([{ ...status, lifecycle: 0 }])).status, 409);
+  assert.equal(
+    (await purge([status, { id: uncertainId, lifecycle: status.lifecycle }]))
+      .status,
+    422,
+  );
+  assert.ok(existsSync(file));
+  const response = await purge([status]);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { deletedCount: 1, failedCount: 0 });
+  assert.equal(existsSync(file), false);
+  assert.equal(readFileSync(uncertainFile, "utf8"), uncertain);
+});
+
+test("purge reclaims attachments only after their last verifiable reference is gone", async (t) => {
+  const { app, req } = await setup(t);
+  const plan = app.store.get(app.store.list()[0].id).variants[0].plan;
+  const b64 = readFileSync(
+    new URL("./fixtures/blue-tetrahedron.glb", import.meta.url),
+  ).toString("base64");
+  const asset = (id) => ({ id, name: id, w: 900, d: 1000, h: 700, b64 });
+  const planWith = (...ids) => ({
+    ...plan,
+    furniture: ids.map((id, index) => ({
+      ...plan.furniture[0],
+      id: "trash-fixture-" + index,
+      key: "model:" + id,
+    })),
+  });
+  const importProject = async (ids, embedded = false) => {
+    const input = planWith(...ids);
+    const response = await req("/api/import", {
+      plan: embedded ? { plan: input, models: ids.map(asset) } : input,
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const sharedIds = ["active", "historical", "recycled", "on-shelf"];
+  const allIds = ["orphan", ...sharedIds, "unknown-model"];
+  const owner = await importProject(allIds, true);
+  const unrelated = await importProject(["after-unknown"], true);
+  const active = await importProject(["active"]);
+  const history = await importProject(["historical"]);
+  const historical = history.variants[0];
+  app.store.commit(history.id, historical.id, historical.revision, planWith());
+  const otherTrash = await importProject(["recycled"]);
+  const models = createModelLibrary(app.store.directory);
+  await models.put("on-shelf", asset("on-shelf"));
+
+  for (const p of [owner, otherTrash]) app.store.trash(p.id, p.lifecycle);
+  const purge = async (id, cleanupDeferred) => {
+    const { lifecycle } = app.store.listTrash().find((p) => p.id === id);
+    const response = await req("/api/trash/purge", {
+      projects: [{ id, lifecycle }],
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      deletedCount: 1,
+      failedCount: 0,
+      ...(cleanupDeferred && { cleanupDeferred }),
+    });
+  };
+  const assetFile = (id) =>
+    join(app.store.directory, "models", "model-" + id + ".json");
+  writeFileSync(assetFile("unknown-model"), "{");
+  await purge(owner.id, 1);
+  assert.equal(existsSync(assetFile("orphan")), false);
+  assert.equal((await req("/api/models/orphan")).status, 404);
+  for (const id of [...sharedIds, "after-unknown"])
+    assert.equal((await models.read(id)).b64, b64);
+  assert.equal(readFileSync(assetFile("unknown-model"), "utf8"), "{");
+  assert.ok(app.store.get(active.id));
+
+  await purge(otherTrash.id, 1);
+  assert.equal(existsSync(assetFile("recycled")), false);
+  const unreadable = join(
+    app.store.directory,
+    "projects",
+    "0000000000000000.json",
+  );
+  writeFileSync(unreadable, "{");
+  app.store.trash(unrelated.id, unrelated.lifecycle);
+  await purge(unrelated.id, 2);
+  assert.equal((await models.read("after-unknown")).b64, b64);
+  assert.equal(readFileSync(unreadable, "utf8"), "{");
+  rmSync(unreadable);
+  const restarted = await startServer({ dataDir: app.store.directory });
+  try {
+    assert.equal(existsSync(assetFile("after-unknown")), false);
+    assert.equal(readFileSync(assetFile("unknown-model"), "utf8"), "{");
+  } finally {
+    await restarted.close();
+  }
 });
 test("invalid image scale or non-integer scheme counts are rejected before a provider call", async (t) => {
   const { mock, req } = await setup(t);
