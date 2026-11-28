@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7-rc.5 — 2026-11-28 (Windows prerelease)
+
+- Detect plan edits from editor events and compare the plan after the pointer is released, instead of serializing it several times a second.
+- Cache fonts, styles, scripts and icons for the desktop session. Editor pages and API responses stay uncached.
+- Send the assistant site notes, service points and a short MEP summary, without meshes, prices or raw service polylines.
+
 ## 0.1.7-rc.4 — 2026-11-24 (Windows prerelease)
 
 - Store imported images as separate workspace attachments so ordinary edits do not rewrite the image bytes. Back up the entire workspace before opening projects with this version. To return to rc.3, restore the pre-upgrade backup.

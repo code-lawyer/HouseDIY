@@ -207,14 +207,31 @@ window.addEventListener("DOMContentLoaded", async () => {
         post({ type: "reply", requestId, error: error.message });
       }
     });
+    // The editor already serializes a plan when it commits. Remember that an
+    // edit happened, then compare once after the pointer is released.
+    let planDirty = false;
+    const markPlan = () => {
+      planDirty = true;
+    };
+    for (const eventName of ["commit", "change", "underlay", "phase"])
+      D.on(eventName, markPlan);
     let lastPlan = JSON.stringify(D.app.plan),
       lastUnderlay = snapshotUnderlay(D.app.underlay),
       lastSelection = "";
     setInterval(() => {
       recovery.update();
       if (gesture) return;
-      const plan = JSON.stringify(D.app.plan),
-        selectedFurniture = D.app.plan.furniture.find(
+      const underlayChanged = !sameUnderlay(lastUnderlay, D.app.underlay);
+      if (planDirty || underlayChanged) {
+        planDirty = false;
+        const plan = JSON.stringify(D.app.plan);
+        if (plan !== lastPlan || underlayChanged) {
+          lastPlan = plan;
+          lastUnderlay = snapshotUnderlay(D.app.underlay);
+          post({ type: "changed" });
+        }
+      }
+      const selectedFurniture = D.app.plan.furniture.find(
           (f) => D.app.sel.kind === "furn" && f.id === D.app.sel.id,
         ),
         sel = JSON.stringify([
@@ -222,11 +239,6 @@ window.addEventListener("DOMContentLoaded", async () => {
           selectedFurniture?.name,
           selectedFurniture?.color,
         ]);
-      if (plan !== lastPlan || !sameUnderlay(lastUnderlay, D.app.underlay)) {
-        lastPlan = plan;
-        lastUnderlay = snapshotUnderlay(D.app.underlay);
-        post({ type: "changed" });
-      }
       if (sel !== lastSelection) {
         lastSelection = sel;
         const selection = D.app.sel,

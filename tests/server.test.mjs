@@ -99,6 +99,30 @@ test("only the desktop editor's inline scripts receive the response nonce", asyn
     html.includes(`<script nonce="${nonce}" type="module" crossorigin>`),
   );
   assert.ok(html.includes('<script id="__shared">window.__SHARED__='));
+  assert.ok(html.includes("on:w0,fit2D:"));
+  assert.equal(response.headers.get("cache-control"), "no-store");
+});
+test("session assets cache while pages and API responses do not", async (t) => {
+  const { app, req } = await setup(t);
+  const style = await req("/design-tokens.css");
+  const script = await req("/editor-bridge.js");
+  const icon = await req("/logo.svg");
+  assert.equal(style.status, 200);
+  assert.equal(style.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal(script.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal(icon.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal((await req("/")).headers.get("cache-control"), "no-store");
+  assert.equal(
+    (await req("/api/projects")).headers.get("cache-control"),
+    "no-store",
+  );
+  const font = await req("/fonts/noto-sans-sc.ttf");
+  assert.equal(font.status, 200);
+  assert.equal(font.headers.get("cache-control"), "private, max-age=86400");
+  assert.equal(
+    (await req("/fonts/noto-sans-sc.ttf")).headers.get("content-length"),
+    font.headers.get("content-length"),
+  );
 });
 test("image import stores the original bytes separately from the model input", async (t) => {
   const { req, mock } = await setup(t);

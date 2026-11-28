@@ -548,13 +548,41 @@ export function applyOperations(input, operations) {
       : [],
   };
 }
+function siteNote(comment) {
+  const note = { id: comment.id };
+  if (typeof comment.text === "string")
+    note.text =
+      comment.text.length > 240 ? comment.text.slice(0, 240) : comment.text;
+  if (comment.x != null) note.x = comment.x;
+  if (comment.y != null) note.y = comment.y;
+  if (comment.resolved != null) note.resolved = comment.resolved;
+  return note;
+}
+function servicePoint(item) {
+  const point = { id: item.id, kind: item.kind, x: item.x, y: item.y };
+  if (item.h != null) point.h = item.h;
+  if (item.name) point.name = item.name;
+  if (item.rot != null) point.rot = item.rot;
+  if (Array.isArray(item.pts)) point.points = item.pts.length;
+  if (Array.isArray(item.links) && item.links.length)
+    point.links = item.links.slice(0, 8);
+  return point;
+}
+function mepSummary(mep = {}) {
+  const edits = mep.edits && typeof mep.edits === "object" ? mep.edits : {};
+  return {
+    ...(mep.power != null ? { power: mep.power } : {}),
+    ...(mep.water != null ? { water: mep.water } : {}),
+    editCount: Object.keys(edits).length,
+  };
+}
 export function sceneContext(plan, selection) {
   const nodes = new Map(plan.nodes.map((n) => [n.id, n]));
-  return structuredClone({
-    ...plan,
+  const scene = {
     name: plan.name,
     units: "mm; x 向右,y 向下; 家具坐标是中心",
     height: plan.height,
+    phase: plan.phase,
     selection,
     walls: plan.walls.map((w) => ({
       ...w,
@@ -573,7 +601,18 @@ export function sceneContext(plan, selection) {
         return item;
       },
     ),
-  });
+    rooms: plan.rooms,
+    structs: plan.structs.map((item) => ({ ...item })),
+    beams: plan.beams.map((item) => ({ ...item })),
+    measures: plan.measures.map((item) => ({ ...item })),
+    voids: plan.voids.map((item) => ({ ...item })),
+    comments: plan.comments.map(siteNote),
+    elec: plan.elec.map(servicePoint),
+    mep: mepSummary(plan.mep),
+  };
+  if (Array.isArray(plan.pendingOpenings))
+    scene.pendingOpenings = plan.pendingOpenings.map((item) => ({ ...item }));
+  return scene;
 }
 // Compatible vision services sometimes quote numbers or use named pixel coordinates.
 // Keep these conversions confined to recognition; saved plans and AI edits stay strict.

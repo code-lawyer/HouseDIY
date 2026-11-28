@@ -14,6 +14,15 @@ import { createModelLibrary, maxPlanFileBytes } from "./model-assets.mjs";
 import { createShapeLibrary } from "./shape-library.mjs";
 
 const base = new URL("../", import.meta.url);
+const staticCache = new Map();
+function readStatic(name) {
+  let content = staticCache.get(name);
+  if (!content) {
+    content = readFileSync(new URL("public/" + name, base));
+    staticCache.set(name, content);
+  }
+  return content;
+}
 const originalImageLimit = 40_000_000;
 const imageData = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/;
 function publicProject(project) {
@@ -560,10 +569,14 @@ export async function startServer({
                 : name.endsWith(".svg")
                   ? "image/svg+xml"
                   : "text/html",
-          content = readFileSync(new URL("public/" + name, base));
-        return res
-          .writeHead(200, { "content-type": type + ";charset=utf-8" })
-          .end(content);
+          content = readStatic(name);
+        const headers = { "content-type": type + ";charset=utf-8" };
+        // The listening port changes every launch, so this only avoids
+        // refetching the font and scripts while one desktop session is open.
+        // Editor HTML carries the plan and must stay uncached.
+        if (/\.(css|m?js|svg|ttf)$/.test(name))
+          headers["Cache-Control"] = "private, max-age=86400";
+        return res.writeHead(200, headers).end(content);
       }
       return json(res, 404, { error: "找不到此页面" });
     } catch (error) {

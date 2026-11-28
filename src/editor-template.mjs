@@ -29,6 +29,9 @@ adapt(
   'location.search.includes("debug")&&(window.__designer={',
   "true&&(window.__designer={importModel:cN,",
 );
+// Desktop save detection subscribes to editor events. Wrapping emit cannot
+// see the internal calls, and the subscription was previously debug-only.
+adapt("emit:Nt,fit2D:Ni", "emit:Nt,on:w0,fit2D:Ni");
 adapt("function JL(){", "function JL(){if(window.__HOUSEDIY__)return null;");
 adapt("async function cN(t){", "async function cN(t,desktopId){");
 adapt(

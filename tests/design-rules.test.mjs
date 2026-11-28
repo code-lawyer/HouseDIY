@@ -487,6 +487,50 @@ test("CLI prompts retain selected furniture and current request once while bound
   assert.ok(!first.includes("MESH-DATA") && !first.includes("HULL-DATA"));
   assert.ok(plan.furniture[0].opt.model.startsWith("MESH-DATA"));
 });
+test("scene context keeps site facts without prices, meshes or service polylines", () => {
+  const plan = empty();
+  plan.prices = { sofa: 99999 };
+  plan.look = { style: "real" };
+  plan.comments = [
+    {
+      id: "note",
+      text: "排污口待测" + "x".repeat(500),
+      x: 10,
+      y: 20,
+      replies: [{ text: "REPLY-BULK" }],
+    },
+  ];
+  plan.elec = [
+    {
+      id: "socket",
+      kind: "socket",
+      x: 1,
+      y: 2,
+      pts: Array.from({ length: 40 }, (_, index) => ({ x: index, y: index })),
+    },
+  ];
+  plan.mep = {
+    power: "floor",
+    water: "ceil",
+    edits: { loop: "POLY-DATA".repeat(50) },
+  };
+  const furniture = newFurniture("freeBox");
+  furniture.opt = { mat: "stone", model: "MESH-DATA", fp: "HULL-DATA" };
+  plan.furniture.push(furniture);
+  const scene = sceneContext(plan, { kind: "furn", id: furniture.id });
+  const encoded = JSON.stringify(scene);
+  assert.equal(scene.comments[0].text.length, 240);
+  assert.equal(scene.comments[0].x, 10);
+  assert.equal(scene.elec[0].points, 40);
+  assert.deepEqual(scene.mep, { power: "floor", water: "ceil", editCount: 1 });
+  assert.equal(scene.prices, undefined);
+  assert.equal(scene.look, undefined);
+  assert.equal(scene.furniture[0].opt.mat, "stone");
+  assert.ok(!encoded.includes("REPLY-BULK"));
+  assert.ok(!encoded.includes("POLY-DATA"));
+  assert.ok(!encoded.includes("MESH-DATA") && !encoded.includes("HULL-DATA"));
+  assert.equal(plan.furniture[0].opt.model, "MESH-DATA");
+});
 test("API history starts with a user and folds unanswered legacy messages before the current turn", async (t) => {
   let request;
   t.mock.method(globalThis, "fetch", async (_url, options) => {
